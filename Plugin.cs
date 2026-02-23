@@ -214,7 +214,6 @@ public static class Hooks
                     // 设置当前字符位置
                     float currentXOffset = TextLayoutManager.GetCurrentLineXOffset();
                     __instance.TEXT[prevSlot].transform.localPosition = new Vector3(baseX + currentXOffset, baseY, baseZ);
-                    Plugin.Logger.LogInfo("[CHAT_BOX.APPLY_LETTER] Set TEXT slot " + prevSlot + " position to X: " + (baseX + currentXOffset));
 
                     // 计算到下一个字符的间距：当前字符宽度的一半 + 下一个字符宽度的一半
                     float currentHalfWidth = TextLayoutManager.GetCharHalfWidth(currentChar, __instance.LANGUAGE);
