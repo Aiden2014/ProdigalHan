@@ -139,6 +139,8 @@ public static class Hooks
     [HarmonyPostfix]
     public static void CHAT_BOX_NEXT_Postfix(CHAT_BOX __instance, int ___CHAT_SLOT, List<GameMaster.Speech> ___FULL_CHAT)
     {
+        // Reset line tracking for the new dialog line
+        TextLayoutManager.ResetLineTracking();
         TextLayoutManager.AdjustNamePositions(__instance, ___FULL_CHAT[___CHAT_SLOT].SpeakerName);
     }
 

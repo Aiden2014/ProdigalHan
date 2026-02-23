@@ -72,10 +72,11 @@ public static class TextLayoutManager
     private static int _lastLineIndex = 0;
 
     /// <summary>
-    /// 初始化行基准X位置数组
+    /// 初始化行基准X位置数组（在每次 CHAT_BOX Awake 时调用，会重新初始化）
     /// </summary>
     public static void InitializeLineBaseX(CHAT_BOX chatBox)
     {
+        // 每次都重新初始化（不使用缓存），这样能在新对话时重置状态
         _lineBaseX = new float[LayoutConstants.MaxLinesBuffer];
         _originalTextX = new float[LayoutConstants.MaxTextSlots];
         int slotIndex = 0;
@@ -98,13 +99,14 @@ public static class TextLayoutManager
                 // 保存每行第一个字符的原始X位置
                 if (child.childCount > 0 && lineIndex < _lineBaseX.Length)
                 {
-                    _lineBaseX[lineIndex] = child.GetChild(0).localPosition.x;
-                    Logger?.LogInfo($"Saved line {lineIndex} base X: {_lineBaseX[lineIndex]}");
+                    float firstChildX = child.GetChild(0).localPosition.x;
+                    _lineBaseX[lineIndex] = firstChildX;
+                    Logger?.LogInfo($"[InitializeLineBaseX] Line {lineIndex}: firstChild={firstChildX}, stored={_lineBaseX[lineIndex]}");
                 }
                 lineIndex++;
             }
         }
-        Logger?.LogInfo($"Saved {slotIndex} TEXT slot original X positions");
+        Logger?.LogInfo($"[InitializeLineBaseX] COMPLETED - Saved {slotIndex} TEXT slots, {lineIndex} lines. Values: _lineBaseX[0]={(_lineBaseX.Length > 0 ? _lineBaseX[0].ToString() : "N/A")}, _lineBaseX[1]={(_lineBaseX.Length > 1 ? _lineBaseX[1].ToString() : "N/A")}, _lineBaseX[2]={(_lineBaseX.Length > 2 ? _lineBaseX[2].ToString() : "N/A")}, _lineBaseX[3]={(_lineBaseX.Length > 3 ? _lineBaseX[3].ToString() : "N/A")}");
     }
 
     /// <summary>
@@ -112,11 +114,19 @@ public static class TextLayoutManager
     /// </summary>
     public static float GetLineBaseX(int lineIndex, CHAT_BOX chatBox, int lineStart)
     {
-        if (_lineBaseX != null && lineIndex >= 0 && lineIndex < _lineBaseX.Length)
+        // 优先使用保存的基准X位置
+        if (_lineBaseX != null && lineIndex >= 0 && lineIndex < _lineBaseX.Length && _lineBaseX[lineIndex] != 0f)
         {
             return _lineBaseX[lineIndex];
         }
-        // 后备方案：使用行首字符的当前位置
+
+        // 如果基准值为0（未初始化），尝试从原始X位置数组推导
+        if (_originalTextX != null && lineStart >= 0 && lineStart < _originalTextX.Length)
+        {
+            return _originalTextX[lineStart];
+        }
+
+        // 最后的后备方案：使用当前位置
         return chatBox.TEXT[lineStart].transform.localPosition.x;
     }
 
@@ -137,6 +147,7 @@ public static class TextLayoutManager
     /// </summary>
     public static void ResetLineTracking()
     {
+        Logger?.LogInfo("[ResetLineTracking] Resetting X offset and line index tracking");
         _currentLineXOffset = 0f;
         _lastLineIndex = 0;
     }
@@ -150,6 +161,7 @@ public static class TextLayoutManager
         {
             _currentLineXOffset = 0f;
             _lastLineIndex = currentLineIndex;
+            Logger?.LogInfo($"[CheckLineChange] Line changed to {currentLineIndex}, reset X offset to 0");
         }
     }
 
@@ -175,7 +187,9 @@ public static class TextLayoutManager
     /// </summary>
     public static void UpdateLineXOffset(float currentHalfWidth, float nextHalfWidth)
     {
+        float oldOffset = _currentLineXOffset;
         _currentLineXOffset += (float)Math.Ceiling(currentHalfWidth + nextHalfWidth);
+        Logger?.LogInfo($"[UpdateLineXOffset] OLD={oldOffset} + ({currentHalfWidth} + {nextHalfWidth}) = NEW={_currentLineXOffset}");
     }
 
     /// <summary>
