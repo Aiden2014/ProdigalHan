@@ -36,6 +36,23 @@ public static class TextProcessing
     }
 
     /// <summary>
+    /// 检查字符是否是应被忽略的特殊标记（颜色标记等）- List&lt;char&gt; 版本
+    /// </summary>
+    public static bool IsIgnoredCharacter(System.Collections.Generic.List<char> chars, int index)
+    {
+        char c = chars[index];
+        if (c == '@')
+        {
+            return true;
+        }
+        if ((c == 'B' || c == 'C') && index >= 1 && chars[index - 1] == '@')
+        {
+            return true;
+        }
+        return false;
+    }
+
+    /// <summary>
     /// 根据是否为古文字来决定是否插入换行
     /// </summary>
     public static string InsertManualBreaks(string text, bool isAncient = false)

@@ -139,8 +139,6 @@ public static class Hooks
     [HarmonyPostfix]
     public static void CHAT_BOX_NEXT_Postfix(CHAT_BOX __instance, int ___CHAT_SLOT, List<GameMaster.Speech> ___FULL_CHAT)
     {
-        // Reset line tracking for the new dialog line
-        TextLayoutManager.ResetLineTracking();
         TextLayoutManager.AdjustNamePositions(__instance, ___FULL_CHAT[___CHAT_SLOT].SpeakerName);
     }
 
@@ -156,9 +154,9 @@ public static class Hooks
     {
         // 即时模式下跳过逐字位置调整，由 AdjustAllTextPositionsByTextSlots 统一处理
         if (IsInstantMode()) return;
-        // 检测换行或新对话开始
+        // 检测换行或新对话开始（T_SLOT == 0 时也重置，处理玩家按A键跳过的情况）
         int currentLineIndex = ___CUR_LINE;
-        TextLayoutManager.CheckLineChange(currentLineIndex);
+        TextLayoutManager.CheckLineChange(currentLineIndex, ___T_SLOT);
     }
 
     [HarmonyPatch(typeof(CHAT_BOX), "APPLY_LETTER")]
@@ -184,7 +182,7 @@ public static class Hooks
         // 检查是否是颜色标记的一部分，如果是则完全跳过
         // @C 开始颜色，@ 结束颜色
         // 这些字符不占用 TEXT 槽位，所以不应该设置位置或计算偏移量
-        if (TextProcessing.IsIgnoredCharacter(___KeysToPress.ToString(), charKeyId))
+        if (TextProcessing.IsIgnoredCharacter(___KeysToPress, charKeyId))
         {
             return;
         }
@@ -193,9 +191,9 @@ public static class Hooks
         if (___T_SLOT > 0 && ___T_SLOT <= __instance.TEXT.Length)
         {
 
-            // 检测换行或新对话开始
+            // 检测换行或新对话开始（T_SLOT == 0 时也重置，处理玩家按A键跳过的情况）
             int currentLineIndex = ___CUR_LINE;
-            TextLayoutManager.CheckLineChange(currentLineIndex);
+            TextLayoutManager.CheckLineChange(currentLineIndex, ___T_SLOT);
             int prevSlot = ___T_SLOT - 1;
             if (prevSlot >= 0 && prevSlot < __instance.TEXT.Length && __instance.TEXT[prevSlot].sprite != null)
             {
@@ -226,7 +224,7 @@ public static class Hooks
                         char nextChar = ___KeysToPress[nextCharId];
 
                         // 跳过 @ 字符
-                        if (TextProcessing.IsIgnoredCharacter(___KeysToPress.ToString(), nextCharId))
+                        if (TextProcessing.IsIgnoredCharacter(___KeysToPress, nextCharId))
                         {
                             nextCharId++;
                             continue;
