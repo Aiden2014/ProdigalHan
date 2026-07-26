@@ -14,6 +14,9 @@ from dataclasses import dataclass
 from pathlib import Path
 
 BUILD_ID = "24023703"
+FUZZY_MIN_LENGTH = 20
+FUZZY_MAX_EDIT_DISTANCE = 8
+FUZZY_MIN_RATIO = 0.97
 
 
 class MigrationError(Exception):
@@ -29,10 +32,11 @@ class FilePlan:
     unmatched_new_rows: list[list[str]]
     exact: int
     normalized: int
+    fuzzy: int
 
     @property
     def matched(self) -> int:
-        return self.exact + self.normalized
+        return self.exact + self.normalized + self.fuzzy
 
 
 @dataclass(frozen=True)
@@ -40,20 +44,56 @@ class MigrationSummary:
     files: int
     exact: int
     normalized: int
+    fuzzy: int
     old_only: int
     new_only: int
 
     @property
     def matched(self) -> int:
-        return self.exact + self.normalized
+        return self.exact + self.normalized + self.fuzzy
+
+
+def prepare_matching_key(value: str) -> str:
+    return value.lstrip("\ufeff")
 
 
 def normalize_structural_key(value: str) -> str:
-    normalized = value.casefold()
+    normalized = prepare_matching_key(value).casefold()
     normalized = re.sub(r"\.\s*\.\s*\.", "...", normalized)
     normalized = normalized.replace("…", "...")
     normalized = normalized.replace("*", " ")
     return " ".join(normalized.split())
+
+
+def fuzzy_anchor(value: str) -> str:
+    return normalize_structural_key(value).split("-", 1)[0]
+
+
+def bounded_edit_distance(left: str, right: str, limit: int) -> int:
+    if abs(len(left) - len(right)) > limit:
+        return limit + 1
+    previous = list(range(len(right) + 1))
+    for left_index, left_char in enumerate(left, 1):
+        current = [left_index]
+        for right_index, right_char in enumerate(right, 1):
+            current.append(
+                min(
+                    current[-1] + 1,
+                    previous[right_index] + 1,
+                    previous[right_index - 1] + (left_char != right_char),
+                )
+            )
+        previous = current
+    return previous[-1]
+
+
+def fuzzy_similarity(left: str, right: str) -> float | None:
+    if min(len(left), len(right)) < FUZZY_MIN_LENGTH:
+        return None
+    distance = bounded_edit_distance(left, right, FUZZY_MAX_EDIT_DISTANCE)
+    if distance > FUZZY_MAX_EDIT_DISTANCE:
+        return None
+    return 1 - distance / max(len(left), len(right))
 
 
 def read_csv(path: Path) -> list[list[str]]:
@@ -100,7 +140,7 @@ def build_file_plan(old_path: Path, new_path: Path) -> FilePlan:
 
     translations: dict[str, tuple[int, str]] = {}
     for old_index, row in enumerate(old_rows):
-        key = row[0].casefold()
+        key = prepare_matching_key(row[0]).casefold()
         if key in translations:
             raise MigrationError(
                 f"{old_path}:{old_index + 1} duplicates first-column key "
@@ -114,7 +154,7 @@ def build_file_plan(old_path: Path, new_path: Path) -> FilePlan:
     exact = 0
 
     for new_index, row in enumerate(new_rows):
-        match = translations.get(row[0].casefold())
+        match = translations.get(prepare_matching_key(row[0]).casefold())
         if match is None:
             unmatched_new_indices.append(new_index)
             continue
@@ -151,6 +191,34 @@ def build_file_plan(old_path: Path, new_path: Path) -> FilePlan:
         used_old_indices.add(old_index)
         normalized += 1
 
+    fuzzy_candidates: dict[str, list[tuple[int, str, str]]] = {}
+    for old_index, row in enumerate(old_rows):
+        if old_index in used_old_indices:
+            continue
+        normalized_key = normalize_structural_key(row[0])
+        fuzzy_candidates.setdefault(fuzzy_anchor(row[0]), []).append(
+            (old_index, normalized_key, row[2] if len(row) >= 3 else "")
+        )
+
+    fuzzy = 0
+    still_unmatched_after_fuzzy: list[int] = []
+    for new_index in still_unmatched_new_indices:
+        new_key = normalize_structural_key(new_rows[new_index][0])
+        candidates = []
+        for old_index, old_key, translation in fuzzy_candidates.get(
+            fuzzy_anchor(new_rows[new_index][0]), []
+        ):
+            similarity = fuzzy_similarity(old_key, new_key)
+            if similarity is not None and similarity >= FUZZY_MIN_RATIO:
+                candidates.append((old_index, translation))
+        if len(candidates) != 1:
+            still_unmatched_after_fuzzy.append(new_index)
+            continue
+        old_index, translation = candidates[0]
+        migrated_rows[new_index][2] = translation
+        used_old_indices.add(old_index)
+        fuzzy += 1
+
     unmatched_old_rows = [
         row.copy()
         for old_index, row in enumerate(old_rows)
@@ -158,7 +226,7 @@ def build_file_plan(old_path: Path, new_path: Path) -> FilePlan:
     ]
     unmatched_new_rows = [
         new_rows[new_index].copy()
-        for new_index in still_unmatched_new_indices
+        for new_index in still_unmatched_after_fuzzy
     ]
     return FilePlan(
         old_path=old_path,
@@ -168,6 +236,7 @@ def build_file_plan(old_path: Path, new_path: Path) -> FilePlan:
         unmatched_new_rows=unmatched_new_rows,
         exact=exact,
         normalized=normalized,
+        fuzzy=fuzzy,
     )
 
 
@@ -335,6 +404,7 @@ def migrate_plans(resources_dir: Path, plans: list[FilePlan]) -> MigrationSummar
         files=len(plans),
         exact=sum(plan.exact for plan in plans),
         normalized=sum(plan.normalized for plan in plans),
+        fuzzy=sum(plan.fuzzy for plan in plans),
         old_only=sum(len(plan.unmatched_old_rows) for plan in plans),
         new_only=sum(len(plan.unmatched_new_rows) for plan in plans),
     )
@@ -368,7 +438,7 @@ def main(argv: list[str] | None = None) -> int:
         for plan in plans:
             print(
                 f"{plan.new_path.name}: exact={plan.exact} "
-                f"normalized={plan.normalized} "
+                f"normalized={plan.normalized} fuzzy={plan.fuzzy} "
                 f"old_only={len(plan.unmatched_old_rows)} "
                 f"new_only={len(plan.unmatched_new_rows)}"
             )
@@ -378,7 +448,7 @@ def main(argv: list[str] | None = None) -> int:
         return 1
     print(
         f"files={summary.files} exact={summary.exact} "
-        f"normalized={summary.normalized} "
+        f"normalized={summary.normalized} fuzzy={summary.fuzzy} "
         f"old_only={summary.old_only} new_only={summary.new_only}"
     )
     return 0
