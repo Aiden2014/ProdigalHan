@@ -27,6 +27,7 @@ __pycache__/
 *.pyo
 *.pyd
 .Python
+.worktrees/
 
 # IDE
 .vscode/
