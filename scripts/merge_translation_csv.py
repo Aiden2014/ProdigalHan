@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import csv
 import os
+import re
 import shutil
 import sys
 import tempfile
@@ -26,15 +27,33 @@ class FilePlan:
     migrated_rows: list[list[str]]
     unmatched_old_rows: list[list[str]]
     unmatched_new_rows: list[list[str]]
-    matched: int
+    exact: int
+    normalized: int
+
+    @property
+    def matched(self) -> int:
+        return self.exact + self.normalized
 
 
 @dataclass(frozen=True)
 class MigrationSummary:
     files: int
-    matched: int
+    exact: int
+    normalized: int
     old_only: int
     new_only: int
+
+    @property
+    def matched(self) -> int:
+        return self.exact + self.normalized
+
+
+def normalize_structural_key(value: str) -> str:
+    normalized = value.casefold()
+    normalized = re.sub(r"\.\s*\.\s*\.", "...", normalized)
+    normalized = normalized.replace("…", "...")
+    normalized = normalized.replace("*", " ")
+    return " ".join(normalized.split())
 
 
 def read_csv(path: Path) -> list[list[str]]:
@@ -79,38 +98,76 @@ def build_file_plan(old_path: Path, new_path: Path) -> FilePlan:
     require_two_columns(old_path, old_rows)
     require_two_columns(new_path, new_rows)
 
-    translations: dict[str, str] = {}
-    for line_number, row in enumerate(old_rows, 1):
+    translations: dict[str, tuple[int, str]] = {}
+    for old_index, row in enumerate(old_rows):
         key = row[0].casefold()
         if key in translations:
             raise MigrationError(
-                f"{old_path}:{line_number} duplicates first-column key "
+                f"{old_path}:{old_index + 1} duplicates first-column key "
                 f"{row[0]!r} after case-folding"
             )
-        translations[key] = row[2] if len(row) >= 3 else ""
+        translations[key] = (old_index, row[2] if len(row) >= 3 else "")
 
-    new_keys = {row[0].casefold() for row in new_rows}
-    migrated_rows = []
-    unmatched_new_rows = []
-    matched = 0
-    for row in new_rows:
-        key = row[0].casefold()
-        if key in translations:
-            matched += 1
-            translation = translations[key]
-        else:
-            translation = ""
-            unmatched_new_rows.append(row.copy())
-        migrated_rows.append([row[0], row[1], translation])
+    migrated_rows = [[row[0], row[1], ""] for row in new_rows]
+    unmatched_new_indices = []
+    used_old_indices: set[int] = set()
+    exact = 0
 
-    unmatched_old_rows = [row.copy() for row in old_rows if row[0].casefold() not in new_keys]
+    for new_index, row in enumerate(new_rows):
+        match = translations.get(row[0].casefold())
+        if match is None:
+            unmatched_new_indices.append(new_index)
+            continue
+        old_index, translation = match
+        migrated_rows[new_index][2] = translation
+        used_old_indices.add(old_index)
+        exact += 1
+
+    normalized_candidates: dict[str, list[tuple[int, str]]] = {}
+    for old_index, row in enumerate(old_rows):
+        if old_index in used_old_indices:
+            continue
+        normalized_key = normalize_structural_key(row[0])
+        translation = row[2] if len(row) >= 3 else ""
+        normalized_candidates.setdefault(normalized_key, []).append(
+            (old_index, translation)
+        )
+
+    normalized_lookup = {
+        key: candidates[0]
+        for key, candidates in normalized_candidates.items()
+        if len(candidates) == 1
+    }
+
+    still_unmatched_new_indices = []
+    normalized = 0
+    for new_index in unmatched_new_indices:
+        match = normalized_lookup.get(normalize_structural_key(new_rows[new_index][0]))
+        if match is None:
+            still_unmatched_new_indices.append(new_index)
+            continue
+        old_index, translation = match
+        migrated_rows[new_index][2] = translation
+        used_old_indices.add(old_index)
+        normalized += 1
+
+    unmatched_old_rows = [
+        row.copy()
+        for old_index, row in enumerate(old_rows)
+        if old_index not in used_old_indices
+    ]
+    unmatched_new_rows = [
+        new_rows[new_index].copy()
+        for new_index in still_unmatched_new_indices
+    ]
     return FilePlan(
         old_path=old_path,
         new_path=new_path,
         migrated_rows=migrated_rows,
         unmatched_old_rows=unmatched_old_rows,
         unmatched_new_rows=unmatched_new_rows,
-        matched=matched,
+        exact=exact,
+        normalized=normalized,
     )
 
 
@@ -276,7 +333,8 @@ def migrate_plans(resources_dir: Path, plans: list[FilePlan]) -> MigrationSummar
     replace_outputs_transactionally(migration_outputs(resources_dir, plans))
     return MigrationSummary(
         files=len(plans),
-        matched=sum(plan.matched for plan in plans),
+        exact=sum(plan.exact for plan in plans),
+        normalized=sum(plan.normalized for plan in plans),
         old_only=sum(len(plan.unmatched_old_rows) for plan in plans),
         new_only=sum(len(plan.unmatched_new_rows) for plan in plans),
     )
@@ -309,7 +367,8 @@ def main(argv: list[str] | None = None) -> int:
         plans = plan_migration(args.resources_dir)
         for plan in plans:
             print(
-                f"{plan.new_path.name}: matched={plan.matched} "
+                f"{plan.new_path.name}: exact={plan.exact} "
+                f"normalized={plan.normalized} "
                 f"old_only={len(plan.unmatched_old_rows)} "
                 f"new_only={len(plan.unmatched_new_rows)}"
             )
@@ -318,7 +377,8 @@ def main(argv: list[str] | None = None) -> int:
         print(f"error: {error}", file=sys.stderr)
         return 1
     print(
-        f"files={summary.files} matched={summary.matched} "
+        f"files={summary.files} exact={summary.exact} "
+        f"normalized={summary.normalized} "
         f"old_only={summary.old_only} new_only={summary.new_only}"
     )
     return 0
