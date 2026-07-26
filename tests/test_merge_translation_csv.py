@@ -396,6 +396,20 @@ class MigrationTests(unittest.TestCase):
         )
         self.assertEqual((summary.fuzzy, summary.old_only, summary.new_only), (0, 1, 1))
 
+    def test_fuzzy_matching_accepts_eight_edits_above_ratio_threshold(self) -> None:
+        old_key = "RATIO-" + "A" * 300
+        new_key = "RATIO-" + "B" * 8 + "A" * 292
+        write_csv(self.resources / "speech.csv", [[old_key, "Old", "应匹配"]])
+        write_csv(self.resources / "speech-24023703.csv", [[new_key, "New"]])
+
+        summary = migrate(self.resources)
+
+        self.assertEqual(
+            read_csv(self.resources / "speech-24023703.csv"),
+            [[new_key, "New", "应匹配"]],
+        )
+        self.assertEqual((summary.fuzzy, summary.old_only, summary.new_only), (1, 0, 0))
+
     def test_fuzzy_matching_rejects_ambiguous_candidates(self) -> None:
         old_rows = [
             ["AMBIG-CONTEXT-A LONG MESSAGE WITH ONE", "Old A", "甲"],
