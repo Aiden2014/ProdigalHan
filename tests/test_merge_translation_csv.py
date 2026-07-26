@@ -247,6 +247,32 @@ class MigrationTests(unittest.TestCase):
         self.assertFalse((self.resources / "old" / old_path.name).exists())
         self.assertFalse((self.resources / "new" / new_path.name).exists())
 
+    def test_allch_mode_does_not_process_normal_pairs(self) -> None:
+        normal_new_path = self.resources / "achievement-24023703.csv"
+        allch_new_path = self.resources / "achievement-ALLCH-24023703.csv"
+        write_csv(
+            self.resources / "achievement.csv",
+            [["NORMAL-KEY", "Normal old text", "普通译文"]],
+        )
+        write_csv(normal_new_path, [["normal-key", "Normal new text", "stale"]])
+        normal_new_before = normal_new_path.read_bytes()
+        write_csv(
+            self.resources / "achievement-ALLCH.csv",
+            [["ALLCH-KEY", "ALLCH old text", "ALLCH 译文"]],
+        )
+        write_csv(allch_new_path, [["allch-key", "ALLCH new text", "stale"]])
+
+        summary = migrate(self.resources, allch=True)
+
+        self.assertEqual(summary.files, 1)
+        self.assertEqual(
+            read_csv(allch_new_path),
+            [["allch-key", "ALLCH new text", "ALLCH 译文"]],
+        )
+        self.assertEqual(normal_new_path.read_bytes(), normal_new_before)
+        self.assertFalse((self.resources / "old" / "achievement.csv").exists())
+        self.assertFalse((self.resources / "new" / normal_new_path.name).exists())
+
     def test_normal_mode_remains_compatible_when_allch_files_are_present(self) -> None:
         normal_old_path = self.resources / "achievement.csv"
         normal_new_path = self.resources / "achievement-24023703.csv"
