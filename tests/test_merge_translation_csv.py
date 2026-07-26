@@ -410,7 +410,7 @@ class MigrationTests(unittest.TestCase):
 
     def test_structural_match_consumes_old_row_before_generated_index_matching(self) -> None:
         old_key = (
-            "Caroline/<MeetEvent>d__25-MoveNext-CAROLINE-HEY . . .*HELP ME OUT"
+            "Caroline/<MeetEvent>d__25-MoveNext-CAROLINE-HEY. . .*HELP ME OUT"
         )
         structural_new_key = (
             "Caroline/<MeetEvent>d__25-MoveNext-Caroline-Hey...*Help me out"

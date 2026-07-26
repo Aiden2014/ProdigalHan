@@ -62,7 +62,7 @@ def prepare_matching_key(value: str) -> str:
 
 def normalize_structural_key(value: str) -> str:
     normalized = prepare_matching_key(value).casefold()
-    normalized = re.sub(r"\s*\.\s*\.\s*\.", "...", normalized)
+    normalized = re.sub(r"\.\s*\.\s*\.", "...", normalized)
     normalized = normalized.replace("…", "...")
     normalized = normalized.replace("*", " ")
     return " ".join(normalized.split())
