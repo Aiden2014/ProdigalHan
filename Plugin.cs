@@ -282,12 +282,18 @@ public static class Hooks
 
     [HarmonyPatch(typeof(GameMaster), nameof(GameMaster.CreateSpeech))]
     [HarmonyPrefix]
+    public static void GameMaster_CreateSpeech_Dump_Prefix(int ID, int EXP, ref string LINE, ref string Name, int VOICE)
+    {
+        // StringDumper.DumpGenericInfo();
+        // StringDumper.DumpSignpostInfo();
+        // StringDumper.LoadAllScenesAndDumpSignposts();
+        // StringDumper.DumpFakeNPCInfo();
+    }
+
+    [HarmonyPatch(typeof(GameMaster), nameof(GameMaster.CreateSpeech))]
+    [HarmonyPrefix]
     public static void GameMaster_CreateSpeech_Prefix(int ID, int EXP, ref string LINE, ref string Name, int VOICE)
     {
-        // DumpGenericInfo();
-        // DumpSignpostInfo();
-        // LoadAllScenesAndDumpSignposts();
-        // DumpFakeNPCInfo();
         var stackTrace = new System.Diagnostics.StackTrace();
         string callerInfo = "UnknownCaller";
 
@@ -479,8 +485,8 @@ public static class Hooks
     // [HarmonyPostfix]
     public static void ItemDatabase_BeginDatabase_Postfix(ItemDatabase __instance)
     {
-        string itemPath = Path.Combine(Paths.PluginPath, "item.csv");
-        string itemTooltipPath = Path.Combine(Paths.PluginPath, "item-tooltip.csv");
+        string itemPath = Path.Combine(Paths.PluginPath, "item-24023703.csv");
+        string itemTooltipPath = Path.Combine(Paths.PluginPath, "item-tooltip-24023703.csv");
         using (StreamWriter writer = new StreamWriter(itemPath))
         {
             using (StreamWriter tooltipWriter = new StreamWriter(itemTooltipPath))

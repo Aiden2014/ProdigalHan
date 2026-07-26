@@ -21,10 +21,10 @@ public class StringDumper
     {
         string dllPath = Path.Combine(Paths.ManagedPath, "Assembly-CSharp.dll");
         _assembly = AssemblyDefinition.ReadAssembly(dllPath);
-        string outputPath = Path.Combine(Paths.PluginPath, "speech.csv");
-        string speecherOutputPath = Path.Combine(Paths.PluginPath, "speecher.csv");
-        string toolOutputPath = Path.Combine(Paths.PluginPath, "tool.csv");
-        string toolAboutOutputPath = Path.Combine(Paths.PluginPath, "tool-about.csv");
+        string outputPath = Path.Combine(Paths.PluginPath, "speech-24023703.csv");
+        string speecherOutputPath = Path.Combine(Paths.PluginPath, "speecher-24023703.csv");
+        string toolOutputPath = Path.Combine(Paths.PluginPath, "tool-24023703.csv");
+        string toolAboutOutputPath = Path.Combine(Paths.PluginPath, "tool-about-24023703.csv");
         HashSet<string> infoSet = new HashSet<string>();
         HashSet<string> nameSet = new HashSet<string>(); // 用于收集唯一的 Name
         HashSet<string> toolHeaderSet = new HashSet<string>(); // 用于收集唯一的 Tool Header
@@ -140,10 +140,10 @@ public class StringDumper
             }
         }
 
-        Plugin.Logger.LogInfo("全量提取完成！检查 speech.csv");
-        Plugin.Logger.LogInfo($"已提取 {nameSet.Count} 个唯一说话者到 speecher.csv");
-        Plugin.Logger.LogInfo($"已提取 {toolHeaderSet.Count} 个唯一工具标题到 tool.csv");
-        Plugin.Logger.LogInfo($"已提取 {toolAboutList.Count} 条工具描述到 tool-about.csv");
+        Plugin.Logger.LogInfo("全量提取完成！检查 speech-24023703.csv");
+        Plugin.Logger.LogInfo($"已提取 {nameSet.Count} 个唯一说话者到 speecher-24023703.csv");
+        Plugin.Logger.LogInfo($"已提取 {toolHeaderSet.Count} 个唯一工具标题到 tool-24023703.csv");
+        Plugin.Logger.LogInfo($"已提取 {toolAboutList.Count} 条工具描述到 tool-about-24023703.csv");
     }
 
     /// <summary>
@@ -585,11 +585,11 @@ public class StringDumper
         return input;
     }
 
-    private static void DumpGenericInfo()
+    public static void DumpGenericInfo()
     {
         Generic[] allGenerics = Resources.FindObjectsOfTypeAll<Generic>();
-        string genericInfoPath = Path.Combine(Paths.PluginPath, "generic-info.csv");
-        string genericNamePath = Path.Combine(Paths.PluginPath, "generic-name.csv");
+        string genericInfoPath = Path.Combine(Paths.PluginPath, "generic-info-24023703.csv");
+        string genericNamePath = Path.Combine(Paths.PluginPath, "generic-name-24023703.csv");
         HashSet<string> genericNames = new HashSet<string>();
         using (StreamWriter infoWriter = new StreamWriter(genericInfoPath))
         {
@@ -622,11 +622,11 @@ public class StringDumper
         }
     }
 
-    private static void DumpFakeNPCInfo()
+    public static void DumpFakeNPCInfo()
     {
         FakeNPC[] allFakeNPC = Resources.FindObjectsOfTypeAll<FakeNPC>();
-        string fakeNPCInfoPath = Path.Combine(Paths.PluginPath, "fakenpc-info.csv");
-        string fakeNPCNamePath = Path.Combine(Paths.PluginPath, "fakenpc-name.csv");
+        string fakeNPCInfoPath = Path.Combine(Paths.PluginPath, "fakenpc-info-24023703.csv");
+        string fakeNPCNamePath = Path.Combine(Paths.PluginPath, "fakenpc-name-24023703.csv");
         HashSet<string> fakeNPCNames = new HashSet<string>();
         using (StreamWriter infoWriter = new StreamWriter(fakeNPCInfoPath))
         {
@@ -665,9 +665,9 @@ public class StringDumper
     private static int _scenesLoaded = 0;
     private static int _totalScenesToLoad = 0;
 
-    private static void DumpSignpostInfo()
+    public static void DumpSignpostInfo()
     {
-        string signpostInfoPath = Path.Combine(Paths.PluginPath, "signpost-info-bundle.csv");
+        string signpostInfoPath = Path.Combine(Paths.PluginPath, "signpost-info-bundle-24023703.csv");
 
         // 使用 Resources.FindObjectsOfTypeAll 获取所有 Signpost，包括未加载场景中的
         Signpost[] allSignposts = Resources.FindObjectsOfTypeAll<Signpost>();
@@ -707,10 +707,10 @@ public class StringDumper
         _dumpedSignpostKeys.Clear();
         _dumpedGuestKeys.Clear();
         _dumpedGuestNames.Clear();
-        string signpostInfoPath = Path.Combine(Paths.PluginPath, "signpost-info-bundle.csv");
+        string signpostInfoPath = Path.Combine(Paths.PluginPath, "signpost-info-bundle-24023703.csv");
         File.WriteAllText(signpostInfoPath, ""); // 清空文件
-        string guestNamePath = Path.Combine(Paths.PluginPath, "guest-name.csv");
-        string guestInfoPath = Path.Combine(Paths.PluginPath, "guest-info.csv");
+        string guestNamePath = Path.Combine(Paths.PluginPath, "guest-name-24023703.csv");
+        string guestInfoPath = Path.Combine(Paths.PluginPath, "guest-info-24023703.csv");
         File.WriteAllText(guestNamePath, ""); // 清空文件
         File.WriteAllText(guestInfoPath, ""); // 清空文件
 
@@ -795,8 +795,8 @@ public class StringDumper
 
     private static void DumpSpecialGuestInfo()
     {
-        string guestNamePath = Path.Combine(Paths.PluginPath, "guest-name.csv");
-        string guestInfoPath = Path.Combine(Paths.PluginPath, "guest-info.csv");
+        string guestNamePath = Path.Combine(Paths.PluginPath, "guest-name-24023703.csv");
+        string guestInfoPath = Path.Combine(Paths.PluginPath, "guest-info-24023703.csv");
 
         SpecialGuest[] allGuests = Resources.FindObjectsOfTypeAll<SpecialGuest>();
 
@@ -851,9 +851,9 @@ public class StringDumper
     public static void DumpAchievementInfo(AchievementWindow __instance)
     {
         Plugin.Logger.LogInfo($"AchievementWindow.CloseTooltip called. Object: {__instance.name}, Name length: {__instance.Name.Count}, Hint length: {__instance.Hint.Count}, About length: {__instance.About.Count}");
-        string achievementPath = Path.Combine(Paths.PluginPath, "achievement-name.csv");
-        string achievementHintPath = Path.Combine(Paths.PluginPath, "achievement-hint.csv");
-        string achievementAboutPath = Path.Combine(Paths.PluginPath, "achievement-about.csv");
+        string achievementPath = Path.Combine(Paths.PluginPath, "achievement-name-24023703.csv");
+        string achievementHintPath = Path.Combine(Paths.PluginPath, "achievement-hint-24023703.csv");
+        string achievementAboutPath = Path.Combine(Paths.PluginPath, "achievement-about-24023703.csv");
         using (StreamWriter nameWriter = new StreamWriter(achievementPath))
         {
             using (StreamWriter nameWriter2 = new StreamWriter(achievementHintPath))
