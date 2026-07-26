@@ -33,3 +33,6 @@ __pycache__/
 .vscode/
 .idea/
 *.code-workspace
+
+# claude
+.claude/
