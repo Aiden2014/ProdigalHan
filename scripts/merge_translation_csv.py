@@ -111,20 +111,27 @@ def read_csv(path: Path) -> list[list[str]]:
         raise MigrationError(f"Cannot read CSV {path}: {error}") from error
 
 
-def discover_pairs(resources_dir: Path) -> list[tuple[Path, Path]]:
-    suffix = f"-{BUILD_ID}.csv"
+def discover_pairs(
+    resources_dir: Path, allch: bool = False
+) -> list[tuple[Path, Path]]:
+    if allch:
+        new_suffix = f"-ALLCH-{BUILD_ID}.csv"
+        old_suffix = "-ALLCH.csv"
+    else:
+        new_suffix = f"-{BUILD_ID}.csv"
+        old_suffix = ".csv"
     new_paths = [
         new_path
-        for new_path in sorted(resources_dir.glob(f"*{suffix}"))
-        if not new_path.name.removesuffix(suffix).endswith("-ALLCH")
+        for new_path in sorted(resources_dir.glob(f"*{new_suffix}"))
+        if allch or not new_path.name.removesuffix(new_suffix).endswith("-ALLCH")
     ]
     if not new_paths:
-        raise MigrationError(f"No *{suffix} files found in {resources_dir}")
+        raise MigrationError(f"No *{new_suffix} files found in {resources_dir}")
 
     pairs = []
     for new_path in new_paths:
-        stem = new_path.name.removesuffix(suffix)
-        old_path = resources_dir / f"{stem}.csv"
+        stem = new_path.name.removesuffix(new_suffix)
+        old_path = resources_dir / f"{stem}{old_suffix}"
         if not old_path.is_file():
             raise MigrationError(
                 f"Missing previous-version CSV for {new_path.name}: {old_path}"
@@ -270,24 +277,29 @@ def build_file_plan(old_path: Path, new_path: Path) -> FilePlan:
     )
 
 
-def plan_migration(resources_dir: Path) -> list[FilePlan]:
-    return [build_file_plan(old_path, new_path) for old_path, new_path in discover_pairs(resources_dir)]
+def plan_migration(resources_dir: Path, allch: bool = False) -> list[FilePlan]:
+    return [
+        build_file_plan(old_path, new_path)
+        for old_path, new_path in discover_pairs(resources_dir, allch=allch)
+    ]
 
 
 def migration_outputs(
-    resources_dir: Path, plans: list[FilePlan]
+    resources_dir: Path, plans: list[FilePlan], allch: bool = False
 ) -> list[tuple[Path, list[list[str]]]]:
+    report_old_dir = resources_dir / ("old-allch" if allch else "old")
+    report_new_dir = resources_dir / ("new-allch" if allch else "new")
     outputs = []
     for plan in plans:
         outputs.extend(
             (
                 (plan.new_path, plan.migrated_rows),
                 (
-                    resources_dir / "old" / plan.old_path.name,
+                    report_old_dir / plan.old_path.name,
                     plan.unmatched_old_rows,
                 ),
                 (
-                    resources_dir / "new" / plan.new_path.name,
+                    report_new_dir / plan.new_path.name,
                     plan.unmatched_new_rows,
                 ),
             )
@@ -428,8 +440,12 @@ def replace_outputs_transactionally(
         )
 
 
-def migrate_plans(resources_dir: Path, plans: list[FilePlan]) -> MigrationSummary:
-    replace_outputs_transactionally(migration_outputs(resources_dir, plans))
+def migrate_plans(
+    resources_dir: Path, plans: list[FilePlan], allch: bool = False
+) -> MigrationSummary:
+    replace_outputs_transactionally(
+        migration_outputs(resources_dir, plans, allch=allch)
+    )
     return MigrationSummary(
         files=len(plans),
         exact=sum(plan.exact for plan in plans),
@@ -441,8 +457,12 @@ def migrate_plans(resources_dir: Path, plans: list[FilePlan]) -> MigrationSummar
     )
 
 
-def migrate(resources_dir: Path) -> MigrationSummary:
-    return migrate_plans(resources_dir, plan_migration(resources_dir))
+def migrate(resources_dir: Path, allch: bool = False) -> MigrationSummary:
+    return migrate_plans(
+        resources_dir,
+        plan_migration(resources_dir, allch=allch),
+        allch=allch,
+    )
 
 
 def default_resources_dir() -> Path:
@@ -459,13 +479,18 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=default_resources_dir(),
         help="directory containing old and *-24023703.csv files",
     )
+    parser.add_argument(
+        "--allch",
+        action="store_true",
+        help="merge -ALLCH.csv into -ALLCH-24023703.csv files",
+    )
     return parser.parse_args(argv)
 
 
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     try:
-        plans = plan_migration(args.resources_dir)
+        plans = plan_migration(args.resources_dir, allch=args.allch)
         for plan in plans:
             print(
                 f"{plan.new_path.name}: exact={plan.exact} "
@@ -474,7 +499,7 @@ def main(argv: list[str] | None = None) -> int:
                 f"old_only={len(plan.unmatched_old_rows)} "
                 f"new_only={len(plan.unmatched_new_rows)}"
             )
-        summary = migrate_plans(args.resources_dir, plans)
+        summary = migrate_plans(args.resources_dir, plans, allch=args.allch)
     except MigrationError as error:
         print(f"error: {error}", file=sys.stderr)
         return 1
