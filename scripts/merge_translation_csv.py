@@ -17,6 +17,7 @@ BUILD_ID = "24023703"
 FUZZY_MIN_LENGTH = 20
 FUZZY_MAX_EDIT_DISTANCE = 8
 FUZZY_MIN_RATIO = 0.97
+GENERATED_INDEX_RE = re.compile(r"d__\d+", re.IGNORECASE)
 
 
 class MigrationError(Exception):
@@ -32,11 +33,12 @@ class FilePlan:
     unmatched_new_rows: list[list[str]]
     exact: int
     normalized: int
+    generated: int
     fuzzy: int
 
     @property
     def matched(self) -> int:
-        return self.exact + self.normalized + self.fuzzy
+        return self.exact + self.normalized + self.generated + self.fuzzy
 
 
 @dataclass(frozen=True)
@@ -44,13 +46,14 @@ class MigrationSummary:
     files: int
     exact: int
     normalized: int
+    generated: int
     fuzzy: int
     old_only: int
     new_only: int
 
     @property
     def matched(self) -> int:
-        return self.exact + self.normalized + self.fuzzy
+        return self.exact + self.normalized + self.generated + self.fuzzy
 
 
 def prepare_matching_key(value: str) -> str:
@@ -59,10 +62,14 @@ def prepare_matching_key(value: str) -> str:
 
 def normalize_structural_key(value: str) -> str:
     normalized = prepare_matching_key(value).casefold()
-    normalized = re.sub(r"\.\s*\.\s*\.", "...", normalized)
+    normalized = re.sub(r"\s*\.\s*\.\s*\.", "...", normalized)
     normalized = normalized.replace("…", "...")
     normalized = normalized.replace("*", " ")
     return " ".join(normalized.split())
+
+
+def normalize_generated_index_key(value: str) -> str:
+    return GENERATED_INDEX_RE.sub("d__#", normalize_structural_key(value))
 
 
 def fuzzy_anchor(value: str) -> str:
@@ -191,6 +198,28 @@ def build_file_plan(old_path: Path, new_path: Path) -> FilePlan:
         used_old_indices.add(old_index)
         normalized += 1
 
+    generated_candidates: dict[str, list[tuple[int, str]]] = {}
+    for old_index, row in enumerate(old_rows):
+        if old_index in used_old_indices:
+            continue
+        key = normalize_generated_index_key(row[0])
+        generated_candidates.setdefault(key, []).append(
+            (old_index, row[2] if len(row) >= 3 else "")
+        )
+
+    generated = 0
+    still_unmatched_after_generated: list[int] = []
+    for new_index in still_unmatched_new_indices:
+        key = normalize_generated_index_key(new_rows[new_index][0])
+        candidates = generated_candidates.get(key, [])
+        if len(candidates) != 1:
+            still_unmatched_after_generated.append(new_index)
+            continue
+        old_index, translation = candidates[0]
+        migrated_rows[new_index][2] = translation
+        used_old_indices.add(old_index)
+        generated += 1
+
     fuzzy_candidates: dict[str, list[tuple[int, str, str]]] = {}
     for old_index, row in enumerate(old_rows):
         if old_index in used_old_indices:
@@ -202,7 +231,7 @@ def build_file_plan(old_path: Path, new_path: Path) -> FilePlan:
 
     fuzzy = 0
     still_unmatched_after_fuzzy: list[int] = []
-    for new_index in still_unmatched_new_indices:
+    for new_index in still_unmatched_after_generated:
         new_key = normalize_structural_key(new_rows[new_index][0])
         candidates = []
         for old_index, old_key, translation in fuzzy_candidates.get(
@@ -236,6 +265,7 @@ def build_file_plan(old_path: Path, new_path: Path) -> FilePlan:
         unmatched_new_rows=unmatched_new_rows,
         exact=exact,
         normalized=normalized,
+        generated=generated,
         fuzzy=fuzzy,
     )
 
@@ -404,6 +434,7 @@ def migrate_plans(resources_dir: Path, plans: list[FilePlan]) -> MigrationSummar
         files=len(plans),
         exact=sum(plan.exact for plan in plans),
         normalized=sum(plan.normalized for plan in plans),
+        generated=sum(plan.generated for plan in plans),
         fuzzy=sum(plan.fuzzy for plan in plans),
         old_only=sum(len(plan.unmatched_old_rows) for plan in plans),
         new_only=sum(len(plan.unmatched_new_rows) for plan in plans),
@@ -438,7 +469,8 @@ def main(argv: list[str] | None = None) -> int:
         for plan in plans:
             print(
                 f"{plan.new_path.name}: exact={plan.exact} "
-                f"normalized={plan.normalized} fuzzy={plan.fuzzy} "
+                f"normalized={plan.normalized} generated={plan.generated} "
+                f"fuzzy={plan.fuzzy} "
                 f"old_only={len(plan.unmatched_old_rows)} "
                 f"new_only={len(plan.unmatched_new_rows)}"
             )
@@ -448,7 +480,8 @@ def main(argv: list[str] | None = None) -> int:
         return 1
     print(
         f"files={summary.files} exact={summary.exact} "
-        f"normalized={summary.normalized} fuzzy={summary.fuzzy} "
+        f"normalized={summary.normalized} generated={summary.generated} "
+        f"fuzzy={summary.fuzzy} "
         f"old_only={summary.old_only} new_only={summary.new_only}"
     )
     return 0
