@@ -402,7 +402,42 @@ class MigrationTests(unittest.TestCase):
             [[new_key, "New", "旧译文"] for new_key in new_keys],
         )
         self.assertEqual(summary.generated, 2)
+        self.assertEqual(
+            summary.matched,
+            summary.exact + summary.normalized + summary.generated + summary.fuzzy,
+        )
         self.assertEqual((summary.old_only, summary.new_only), (0, 0))
+
+    def test_structural_match_consumes_old_row_before_generated_index_matching(self) -> None:
+        old_key = (
+            "Caroline/<MeetEvent>d__25-MoveNext-CAROLINE-HEY . . .*HELP ME OUT"
+        )
+        structural_new_key = (
+            "Caroline/<MeetEvent>d__25-MoveNext-Caroline-Hey...*Help me out"
+        )
+        generated_new_key = (
+            "Caroline/<MeetEvent>d__26-MoveNext-Caroline-Hey...*Help me out"
+        )
+        write_csv(self.resources / "speech.csv", [[old_key, "Old", "结构译文"]])
+        write_csv(
+            self.resources / "speech-24023703.csv",
+            [[structural_new_key, "Structural"], [generated_new_key, "Generated"]],
+        )
+
+        summary = migrate(self.resources)
+
+        self.assertEqual(
+            read_csv(self.resources / "speech-24023703.csv"),
+            [
+                [structural_new_key, "Structural", "结构译文"],
+                [generated_new_key, "Generated", ""],
+            ],
+        )
+        self.assertEqual(
+            (summary.exact, summary.normalized, summary.generated, summary.fuzzy),
+            (0, 1, 0, 0),
+        )
+        self.assertEqual((summary.old_only, summary.new_only), (0, 1))
 
     def test_fuzzy_matching_rejects_keys_shorter_than_minimum_length(self) -> None:
         old_key = "A-12345678901234567"
