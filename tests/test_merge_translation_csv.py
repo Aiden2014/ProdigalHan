@@ -91,6 +91,38 @@ class MigrationTests(unittest.TestCase):
             (self.resources / "speech-24023703.csv").read_bytes().startswith(b"\xef\xbb\xbf")
         )
 
+    def test_matching_uses_only_first_column_not_display_text(self) -> None:
+        old_rows = [
+            ["SAME-KEY", "Old display text", "matched translation"],
+            ["OLD-ONLY", "Shared display text", "unmatched translation"],
+        ]
+        new_rows = [
+            ["same-key", "New display text"],
+            ["NEW-ONLY", "Shared display text"],
+        ]
+        write_csv(self.resources / "speech.csv", old_rows)
+        write_csv(self.resources / "speech-24023703.csv", new_rows)
+
+        summary = migrate(self.resources)
+
+        self.assertEqual(
+            read_csv(self.resources / "speech-24023703.csv"),
+            [
+                ["same-key", "New display text", "matched translation"],
+                ["NEW-ONLY", "Shared display text", ""],
+            ],
+        )
+        self.assertEqual((summary.exact, summary.normalized), (1, 0))
+        self.assertEqual((summary.old_only, summary.new_only), (1, 1))
+        self.assertEqual(
+            read_csv(self.resources / "old" / "speech.csv"),
+            [["OLD-ONLY", "Shared display text", "unmatched translation"]],
+        )
+        self.assertEqual(
+            read_csv(self.resources / "new" / "speech-24023703.csv"),
+            [["NEW-ONLY", "Shared display text"]],
+        )
+
     def test_repeated_new_keys_receive_the_same_translation(self) -> None:
         write_csv(self.resources / "speaker.csv", [["SISKA", "SISKA", "西斯卡"]])
         write_csv(
