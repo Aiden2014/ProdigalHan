@@ -119,8 +119,8 @@ the second proves two qualifying old candidates stay visible as unmatched:
 
 ```python
 def test_fuzzy_matching_rejects_keys_shorter_than_minimum_length(self) -> None:
-    old_key = "A-123456789012"
-    new_key = "A-123456789013"
+    old_key = "A-12345678901234567"
+    new_key = "A-12345678901234568"
     write_csv(self.resources / "item.csv", [[old_key, "Old", "不应匹配"]])
     write_csv(self.resources / "item-24023703.csv", [[new_key, "New"]])
 
@@ -154,6 +154,18 @@ def test_fuzzy_matching_rejects_ambiguous_candidates(self) -> None:
         [[new_key, "New"]],
     )
 ```
+
+The boundary review also requires these additional real-CSV tests in the
+same task: `test_fuzzy_matching_rejects_different_first_hyphen_prefixes` uses
+`OLD-CONTEXT-...` versus `NEW-CONTEXT-...`;
+`test_fuzzy_matching_rejects_edit_distance_greater_than_eight` changes nine
+characters in a long `DISTANCE-` key; and
+`test_fuzzy_matching_rejects_candidate_below_ratio_threshold` changes eight
+characters in a shorter `RATIO-` key. Add
+`test_structural_match_wins_over_fuzzy_candidate` with one `. . .` structural
+candidate and one one-character fuzzy candidate, asserting the structural
+translation wins. These tests must assert migrated rows, fuzzy counts, and
+old/new unmatched counts using literal expected values.
 
 - [ ] **Step 5: Update the existing semantic-change and CLI tests**
 
@@ -367,7 +379,7 @@ py -m unittest tests.test_merge_translation_csv -v
 py -m py_compile scripts\merge_translation_csv.py tests\test_merge_translation_csv.py
 ```
 
-Expected: all 29 tests pass and compilation exits 0 with no output.
+Expected: all 34 tests pass and compilation exits 0 with no output.
 
 - [ ] **Step 7: Commit implementation**
 
@@ -403,7 +415,7 @@ resource directory.
 py -B -m unittest discover -s tests -v
 ```
 
-Expected: all 29 tests pass.
+Expected: all 34 tests pass.
 
 - [ ] **Step 3: Check final diff and workspace hygiene**
 
@@ -421,4 +433,3 @@ with unrelated user files left untouched.
 Use `superpowers:requesting-code-review` against the implementation range,
 then resolve any confirmed Critical or Important findings before reporting
 completion.
-
