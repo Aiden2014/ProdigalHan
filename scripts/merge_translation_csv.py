@@ -5,7 +5,10 @@ from __future__ import annotations
 
 import argparse
 import csv
+import os
+import shutil
 import sys
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -44,15 +47,17 @@ def read_csv(path: Path) -> list[list[str]]:
 
 def discover_pairs(resources_dir: Path) -> list[tuple[Path, Path]]:
     suffix = f"-{BUILD_ID}.csv"
-    new_paths = sorted(resources_dir.glob(f"*{suffix}"))
+    new_paths = [
+        new_path
+        for new_path in sorted(resources_dir.glob(f"*{suffix}"))
+        if not new_path.name.removesuffix(suffix).endswith("-ALLCH")
+    ]
     if not new_paths:
         raise MigrationError(f"No *{suffix} files found in {resources_dir}")
 
     pairs = []
     for new_path in new_paths:
         stem = new_path.name.removesuffix(suffix)
-        if stem.endswith("-ALLCH"):
-            continue
         old_path = resources_dir / f"{stem}.csv"
         if not old_path.is_file():
             raise MigrationError(
@@ -113,17 +118,142 @@ def plan_migration(resources_dir: Path) -> list[FilePlan]:
     return [build_file_plan(old_path, new_path) for old_path, new_path in discover_pairs(resources_dir)]
 
 
-def write_csv(path: Path, rows: list[list[str]]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", encoding="utf-8-sig", newline="") as handle:
-        csv.writer(handle).writerows(rows)
+def migration_outputs(
+    resources_dir: Path, plans: list[FilePlan]
+) -> list[tuple[Path, list[list[str]]]]:
+    outputs = []
+    for plan in plans:
+        outputs.extend(
+            (
+                (plan.new_path, plan.migrated_rows),
+                (
+                    resources_dir / "old" / plan.old_path.name,
+                    plan.unmatched_old_rows,
+                ),
+                (
+                    resources_dir / "new" / plan.new_path.name,
+                    plan.unmatched_new_rows,
+                ),
+            )
+        )
+    return outputs
+
+
+def cleanup_transaction_files(paths: list[Path]) -> list[str]:
+    errors = []
+    for path in paths:
+        try:
+            path.unlink(missing_ok=True)
+        except OSError as error:
+            errors.append(f"{path}: {error}")
+    return errors
+
+
+def stage_outputs(
+    outputs: list[tuple[Path, list[list[str]]]],
+) -> dict[Path, Path]:
+    staged: dict[Path, Path] = {}
+    current_target: Path | None = None
+    try:
+        for current_target, rows in outputs:
+            current_target.parent.mkdir(parents=True, exist_ok=True)
+            with tempfile.NamedTemporaryFile(
+                "w",
+                encoding="utf-8",
+                newline="",
+                dir=current_target.parent,
+                prefix=f".{current_target.name}.",
+                suffix=".tmp",
+                delete=False,
+            ) as handle:
+                staged[current_target] = Path(handle.name)
+                handle.write("\ufeff")
+                csv.writer(handle).writerows(rows)
+    except OSError as error:
+        cleanup_errors = cleanup_transaction_files(list(staged.values()))
+        detail = f"Cannot stage migration output {current_target}: {error}"
+        if cleanup_errors:
+            detail += f"; cleanup failed: {'; '.join(cleanup_errors)}"
+        raise MigrationError(detail) from error
+    return staged
+
+
+def backup_existing_outputs(outputs: list[tuple[Path, list[list[str]]]]) -> dict[Path, Path]:
+    backups: dict[Path, Path] = {}
+    current_target: Path | None = None
+    try:
+        for current_target, _ in outputs:
+            if not current_target.exists():
+                continue
+            with tempfile.NamedTemporaryFile(
+                "wb",
+                dir=current_target.parent,
+                prefix=f".{current_target.name}.",
+                suffix=".bak",
+                delete=False,
+            ) as handle:
+                backup_path = Path(handle.name)
+            backups[current_target] = backup_path
+            shutil.copyfile(current_target, backup_path)
+    except OSError as error:
+        cleanup_errors = cleanup_transaction_files(list(backups.values()))
+        detail = f"Cannot back up migration output {current_target}: {error}"
+        if cleanup_errors:
+            detail += f"; cleanup failed: {'; '.join(cleanup_errors)}"
+        raise MigrationError(detail) from error
+    return backups
+
+
+def rollback_outputs(
+    outputs: list[tuple[Path, list[list[str]]]], backups: dict[Path, Path]
+) -> list[str]:
+    errors = []
+    for target, _ in outputs:
+        try:
+            if target in backups:
+                os.replace(backups[target], target)
+            else:
+                target.unlink(missing_ok=True)
+        except OSError as error:
+            errors.append(f"{target}: {error}")
+    return errors
+
+
+def replace_outputs_transactionally(
+    outputs: list[tuple[Path, list[list[str]]]],
+) -> None:
+    staged = stage_outputs(outputs)
+    try:
+        backups = backup_existing_outputs(outputs)
+    except MigrationError:
+        cleanup_transaction_files(list(staged.values()))
+        raise
+
+    current_target: Path | None = None
+    try:
+        for current_target, _ in outputs:
+            os.replace(staged[current_target], current_target)
+    except OSError as error:
+        rollback_errors = rollback_outputs(outputs, backups)
+        cleanup_errors = cleanup_transaction_files(
+            [*staged.values(), *backups.values()]
+        )
+        detail = f"Cannot replace migration output {current_target}: {error}"
+        if rollback_errors:
+            detail += f"; rollback failed: {'; '.join(rollback_errors)}"
+        if cleanup_errors:
+            detail += f"; cleanup failed: {'; '.join(cleanup_errors)}"
+        raise MigrationError(detail) from error
+
+    cleanup_errors = cleanup_transaction_files(list(backups.values()))
+    if cleanup_errors:
+        raise MigrationError(
+            f"Cannot clean up migration backups: {'; '.join(cleanup_errors)}"
+        )
 
 
 def migrate_plans(resources_dir: Path, plans: list[FilePlan]) -> MigrationSummary:
-    for plan in plans:
-        write_csv(plan.new_path, plan.migrated_rows)
-        write_csv(resources_dir / "old" / plan.old_path.name, plan.unmatched_old_rows)
-        write_csv(resources_dir / "new" / plan.new_path.name, plan.unmatched_new_rows)
+    replace_outputs_transactionally(migration_outputs(resources_dir, plans))
     return MigrationSummary(
         files=len(plans),
         matched=sum(plan.matched for plan in plans),

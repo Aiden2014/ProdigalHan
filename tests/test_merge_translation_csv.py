@@ -1,9 +1,11 @@
 import csv
 import contextlib
 import io
+import os
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from scripts.merge_translation_csv import MigrationError, main, migrate
 
@@ -67,7 +69,7 @@ class MigrationTests(unittest.TestCase):
         )
         self.assertEqual(summary.matched, 2)
 
-    def test_skips_allch_csv_pairs(self) -> None:
+    def test_rejects_allch_only_inputs_as_no_migration_inputs(self) -> None:
         write_csv(
             self.resources / "dialogue-ALLCH.csv",
             [["KEY", "Old text", "旧文本"]],
@@ -76,12 +78,75 @@ class MigrationTests(unittest.TestCase):
         write_csv(new_path, [["KEY", "New text", "stale"]])
         before_migration = new_path.read_bytes()
 
-        summary = migrate(self.resources)
+        with self.assertRaisesRegex(MigrationError, "No .* files found"):
+            migrate(self.resources)
 
-        self.assertEqual(summary.files, 0)
         self.assertEqual(new_path.read_bytes(), before_migration)
         self.assertFalse((self.resources / "old" / "dialogue-ALLCH.csv").exists())
         self.assertFalse((self.resources / "new" / new_path.name).exists())
+
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr):
+            exit_code = main(["--resources-dir", str(self.resources)])
+
+        self.assertEqual(exit_code, 1)
+        self.assertIn("No *-24023703.csv files found", stderr.getvalue())
+
+    def test_migrates_normal_pair_without_changing_allch_pair(self) -> None:
+        write_csv(self.resources / "speech.csv", [["KEY", "Text", "译文"]])
+        write_csv(self.resources / "speech-24023703.csv", [["key", "Text"]])
+        write_csv(
+            self.resources / "dialogue-ALLCH.csv",
+            [["ALLCH", "Old text", "旧文本"]],
+        )
+        allch_new_path = self.resources / "dialogue-ALLCH-24023703.csv"
+        write_csv(allch_new_path, [["ALLCH", "New text", "stale"]])
+        allch_old_bytes = (self.resources / "dialogue-ALLCH.csv").read_bytes()
+        allch_new_bytes = allch_new_path.read_bytes()
+
+        summary = migrate(self.resources)
+
+        self.assertEqual(summary.files, 1)
+        self.assertEqual(
+            read_csv(self.resources / "speech-24023703.csv"),
+            [["key", "Text", "译文"]],
+        )
+        self.assertEqual(
+            (self.resources / "dialogue-ALLCH.csv").read_bytes(), allch_old_bytes
+        )
+        self.assertEqual(allch_new_path.read_bytes(), allch_new_bytes)
+        self.assertFalse((self.resources / "old" / "dialogue-ALLCH.csv").exists())
+        self.assertFalse((self.resources / "new" / allch_new_path.name).exists())
+
+    def test_casefold_matching_keeps_whitespace_punctuation_and_stars_significant(
+        self,
+    ) -> None:
+        old_rows = [
+            ["SPACE KEY", "Text", "space"],
+            ["PUNCT-KEY", "Text", "punctuation"],
+            ["*STARKEY", "Text", "star"],
+        ]
+        new_rows = [
+            ["space  key", "Text"],
+            ["punct.key", "Text"],
+            ["starkey*", "Text"],
+        ]
+        write_csv(self.resources / "speech.csv", old_rows)
+        write_csv(self.resources / "speech-24023703.csv", new_rows)
+
+        summary = migrate(self.resources)
+
+        self.assertEqual(summary.matched, 0)
+        self.assertEqual(summary.old_only, 3)
+        self.assertEqual(summary.new_only, 3)
+        self.assertEqual(
+            read_csv(self.resources / "speech-24023703.csv"),
+            [row + [""] for row in new_rows],
+        )
+        self.assertEqual(read_csv(self.resources / "old" / "speech.csv"), old_rows)
+        self.assertEqual(
+            read_csv(self.resources / "new" / "speech-24023703.csv"), new_rows
+        )
 
     def test_writes_original_old_only_and_new_only_rows(self) -> None:
         old_only = ["OLD-SCENE", "Removed text", "旧剧情"]
@@ -121,6 +186,66 @@ class MigrationTests(unittest.TestCase):
         self.assertEqual(read_csv(self.resources / "item-24023703.csv"), [["item-0", "", ""]])
         self.assertEqual(read_csv(self.resources / "old" / "item.csv"), [])
         self.assertEqual(read_csv(self.resources / "new" / "item-24023703.csv"), [])
+
+    def test_empty_generated_csvs_contain_only_utf8_bom(self) -> None:
+        write_csv(self.resources / "empty.csv", [])
+        write_csv(self.resources / "empty-24023703.csv", [])
+
+        migrate(self.resources)
+
+        for path in (
+            self.resources / "empty-24023703.csv",
+            self.resources / "old" / "empty.csv",
+            self.resources / "new" / "empty-24023703.csv",
+        ):
+            with self.subTest(path=path):
+                self.assertEqual(path.read_bytes(), b"\xef\xbb\xbf")
+
+    def test_replacement_failure_rolls_back_every_output(self) -> None:
+        write_csv(self.resources / "speech.csv", [["KEY", "Old", "译文"]])
+        new_path = self.resources / "speech-24023703.csv"
+        write_csv(new_path, [["key", "New", "stale"]])
+        old_report_path = self.resources / "old" / "speech.csv"
+        write_csv(old_report_path, [["PRIOR", "Old report", "保留"]])
+        new_report_path = self.resources / "new" / new_path.name
+        original_new_bytes = new_path.read_bytes()
+        original_old_report_bytes = old_report_path.read_bytes()
+        real_replace = os.replace
+        replacement_attempts: list[Path] = []
+        failure_injected = False
+
+        def fail_second_replacement(
+            source: os.PathLike[str], target: os.PathLike[str]
+        ) -> None:
+            nonlocal failure_injected
+            target_path = Path(target)
+            if target_path in {new_path, old_report_path, new_report_path}:
+                replacement_attempts.append(target_path)
+                if len(replacement_attempts) == 2 and not failure_injected:
+                    failure_injected = True
+                    raise OSError("injected replacement failure")
+            real_replace(source, target)
+
+        with mock.patch("os.replace", side_effect=fail_second_replacement):
+            with self.assertRaisesRegex(MigrationError, "injected replacement failure"):
+                migrate(self.resources)
+
+        self.assertEqual(replacement_attempts[:2], [new_path, old_report_path])
+        self.assertEqual(new_path.read_bytes(), original_new_bytes)
+        self.assertEqual(old_report_path.read_bytes(), original_old_report_bytes)
+        self.assertFalse(new_report_path.exists())
+        self.assertEqual(
+            {
+                path.relative_to(self.resources)
+                for path in self.resources.rglob("*")
+                if path.is_file()
+            },
+            {
+                Path("speech.csv"),
+                Path("speech-24023703.csv"),
+                Path("old/speech.csv"),
+            },
+        )
 
     def test_rejects_csv_parse_and_decode_errors(self) -> None:
         for directory_name, invalid_bytes in (
@@ -212,3 +337,33 @@ class CliTests(unittest.TestCase):
 
             self.assertEqual(exit_code, 1)
             self.assertIn("No *-24023703.csv files found", stderr.getvalue())
+
+    def test_main_returns_nonzero_for_transaction_failure_without_traceback(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            resources = Path(directory) / "resources"
+            resources.mkdir()
+            write_csv(resources / "speech.csv", [["KEY", "Text", "译文"]])
+            new_path = resources / "speech-24023703.csv"
+            write_csv(new_path, [["key", "Text", "stale"]])
+            original_new_bytes = new_path.read_bytes()
+            real_replace = os.replace
+            failure_injected = False
+
+            def fail_first_replacement(
+                source: os.PathLike[str], target: os.PathLike[str]
+            ) -> None:
+                nonlocal failure_injected
+                if not failure_injected:
+                    failure_injected = True
+                    raise OSError("injected CLI replacement failure")
+                real_replace(source, target)
+
+            stderr = io.StringIO()
+            with mock.patch("os.replace", side_effect=fail_first_replacement):
+                with contextlib.redirect_stderr(stderr):
+                    exit_code = main(["--resources-dir", str(resources)])
+
+            self.assertEqual(exit_code, 1)
+            self.assertIn("injected CLI replacement failure", stderr.getvalue())
+            self.assertNotIn("Traceback", stderr.getvalue())
+            self.assertEqual(new_path.read_bytes(), original_new_bytes)
