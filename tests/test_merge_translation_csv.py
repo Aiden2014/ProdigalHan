@@ -91,6 +91,26 @@ class MigrationTests(unittest.TestCase):
             (self.resources / "speech-24023703.csv").read_bytes().startswith(b"\xef\xbb\xbf")
         )
 
+    def test_matching_ignores_extra_leading_bom_in_old_key(self) -> None:
+        old_path = self.resources / "speech.csv"
+        write_csv(
+            old_path,
+            [["KEY-BOM-CONTEXT-LONG", "Old display", "旧译文"]],
+            encoding="utf-8-sig",
+        )
+        old_path.write_bytes(b"\xef\xbb\xbf" + old_path.read_bytes())
+        new_rows = [["key-bom-context-long", "New display"]]
+        write_csv(self.resources / "speech-24023703.csv", new_rows)
+
+        summary = migrate(self.resources)
+
+        self.assertEqual(
+            read_csv(self.resources / "speech-24023703.csv"),
+            [["key-bom-context-long", "New display", "旧译文"]],
+        )
+        self.assertEqual((summary.exact, summary.normalized, summary.fuzzy), (1, 0, 0))
+        self.assertEqual((summary.old_only, summary.new_only), (0, 0))
+
     def test_matching_uses_only_first_column_not_display_text(self) -> None:
         old_rows = [
             ["SAME-KEY", "Old display text", "matched translation"],
@@ -278,11 +298,82 @@ class MigrationTests(unittest.TestCase):
 
         summary = migrate(self.resources)
 
-        self.assertEqual((summary.exact, summary.normalized), (0, 0))
+        self.assertEqual((summary.exact, summary.normalized, summary.fuzzy), (0, 0, 0))
         self.assertEqual((summary.old_only, summary.new_only), (1, 1))
         self.assertEqual(
             read_csv(self.resources / "item-24023703.csv"),
             [[new_key, new_key, ""]],
+        )
+
+    def test_fuzzy_matching_accepts_small_punctuation_edit(self) -> None:
+        old_key = (
+            "ELITE_FEAT-CHECK-AURA-INCREDIBLE. . .*I.*IS THERE REALLY A"
+            "*CHANCE?*THERE MAY BE A*WAY.*LISTEN CLOSE TO*THIS FORTUNE."
+        )
+        new_key = (
+            "ELITE_FEAT-CHECK-Aura-Incredible...*I-*Is there really a chance?"
+            "*There may be a way.*Listen close to this fortune."
+        )
+        write_csv(self.resources / "speech.csv", [[old_key, "Old", "旧占卜"]])
+        write_csv(self.resources / "speech-24023703.csv", [[new_key, "New"]])
+
+        summary = migrate(self.resources)
+
+        self.assertEqual(
+            read_csv(self.resources / "speech-24023703.csv"),
+            [[new_key, "New", "旧占卜"]],
+        )
+        self.assertEqual((summary.exact, summary.normalized, summary.fuzzy), (0, 0, 1))
+        self.assertEqual((summary.old_only, summary.new_only), (0, 0))
+
+    def test_fuzzy_matching_accepts_unique_short_spelling_edit(self) -> None:
+        old_key = "SPELL-CONTEXT-A LONG SPELLING MISTAKE IN THIS MESSAGE"
+        new_key = "SPELL-CONTEXT-A LONG SPELING MISTAKE IN THIS MESSAGE"
+        write_csv(self.resources / "speech.csv", [[old_key, "Old", "拼写译文"]])
+        write_csv(self.resources / "speech-24023703.csv", [[new_key, "New"]])
+
+        summary = migrate(self.resources)
+
+        self.assertEqual(
+            read_csv(self.resources / "speech-24023703.csv"),
+            [[new_key, "New", "拼写译文"]],
+        )
+        self.assertEqual((summary.exact, summary.normalized, summary.fuzzy), (0, 0, 1))
+
+    def test_fuzzy_matching_rejects_keys_shorter_than_minimum_length(self) -> None:
+        old_key = "A-123456789012"
+        new_key = "A-123456789013"
+        write_csv(self.resources / "item.csv", [[old_key, "Old", "不应匹配"]])
+        write_csv(self.resources / "item-24023703.csv", [[new_key, "New"]])
+
+        summary = migrate(self.resources)
+
+        self.assertEqual(
+            read_csv(self.resources / "item-24023703.csv"),
+            [[new_key, "New", ""]],
+        )
+        self.assertEqual((summary.fuzzy, summary.old_only, summary.new_only), (0, 1, 1))
+
+    def test_fuzzy_matching_rejects_ambiguous_candidates(self) -> None:
+        old_rows = [
+            ["AMBIG-CONTEXT-A LONG MESSAGE WITH ONE", "Old A", "甲"],
+            ["AMBIG-CONTEXT-B LONG MESSAGE WITH ONE", "Old B", "乙"],
+        ]
+        new_key = "AMBIG-CONTEXT-C LONG MESSAGE WITH ONE"
+        write_csv(self.resources / "speech.csv", old_rows)
+        write_csv(self.resources / "speech-24023703.csv", [[new_key, "New"]])
+
+        summary = migrate(self.resources)
+
+        self.assertEqual(
+            read_csv(self.resources / "speech-24023703.csv"),
+            [[new_key, "New", ""]],
+        )
+        self.assertEqual((summary.fuzzy, summary.old_only, summary.new_only), (0, 2, 1))
+        self.assertEqual(read_csv(self.resources / "old" / "speech.csv"), old_rows)
+        self.assertEqual(
+            read_csv(self.resources / "new" / "speech-24023703.csv"),
+            [[new_key, "New"]],
         )
 
     def test_writes_original_old_only_and_new_only_rows(self) -> None:
@@ -519,11 +610,19 @@ class CliTests(unittest.TestCase):
             resources.mkdir()
             write_csv(
                 resources / "speech.csv",
-                [["KEY", "Text", "译文"], ["SECOND*KEY", "Text", "第二条"]],
+                [
+                    ["KEY", "Text", "译文"],
+                    ["SECOND*KEY", "Text", "第二条"],
+                    ["FUZZY-CONTEXT-A LONG SPELLING MISTAKE IN THIS MESSAGE", "Text", "模糊"],
+                ],
             )
             write_csv(
                 resources / "speech-24023703.csv",
-                [["key", "Text"], ["second key", "Text"]],
+                [
+                    ["key", "Text"],
+                    ["second key", "Text"],
+                    ["FUZZY-CONTEXT-A LONG SPELING MISTAKE IN THIS MESSAGE", "Text"],
+                ],
             )
             stdout = io.StringIO()
 
@@ -532,11 +631,11 @@ class CliTests(unittest.TestCase):
 
             self.assertEqual(exit_code, 0)
             self.assertIn(
-                "speech-24023703.csv: exact=1 normalized=1 old_only=0 new_only=0",
+                "speech-24023703.csv: exact=1 normalized=1 fuzzy=1 old_only=0 new_only=0",
                 stdout.getvalue(),
             )
             self.assertIn(
-                "files=1 exact=1 normalized=1 old_only=0 new_only=0",
+                "files=1 exact=1 normalized=1 fuzzy=1 old_only=0 new_only=0",
                 stdout.getvalue(),
             )
 
