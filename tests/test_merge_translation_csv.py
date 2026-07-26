@@ -247,6 +247,70 @@ class MigrationTests(unittest.TestCase):
             },
         )
 
+    def test_rollback_failure_preserves_recovery_backup_and_continues(self) -> None:
+        write_csv(self.resources / "speech.csv", [["KEY", "Old", "译文"]])
+        new_path = self.resources / "speech-24023703.csv"
+        write_csv(new_path, [["key", "New", "stale"]])
+        old_report_path = self.resources / "old" / "speech.csv"
+        write_csv(old_report_path, [["PRIOR", "Old report", "保留"]])
+        new_report_path = self.resources / "new" / new_path.name
+        original_new_bytes = new_path.read_bytes()
+        original_old_report_bytes = old_report_path.read_bytes()
+        real_replace = os.replace
+        commit_failure_injected = False
+
+        def fail_commit_and_restore(
+            source: os.PathLike[str], target: os.PathLike[str]
+        ) -> None:
+            nonlocal commit_failure_injected
+            source_path = Path(source)
+            target_path = Path(target)
+            if (
+                source_path.suffix == ".tmp"
+                and target_path == old_report_path
+                and not commit_failure_injected
+            ):
+                commit_failure_injected = True
+                raise OSError("injected commit failure")
+            if source_path.suffix == ".bak" and target_path == new_path:
+                raise OSError("injected restore failure")
+            real_replace(source, target)
+
+        with mock.patch("os.replace", side_effect=fail_commit_and_restore):
+            with self.assertRaises(MigrationError) as raised:
+                migrate(self.resources)
+
+        recovery_backups = list(self.resources.rglob("*.bak"))
+        self.assertEqual(len(recovery_backups), 1)
+        recovery_backup = recovery_backups[0]
+        self.assertEqual(recovery_backup.read_bytes(), original_new_bytes)
+        self.assertIn(str(recovery_backup.resolve()), str(raised.exception))
+        self.assertIn("injected commit failure", str(raised.exception))
+        self.assertIn("injected restore failure", str(raised.exception))
+        self.assertEqual(old_report_path.read_bytes(), original_old_report_bytes)
+        self.assertFalse(new_report_path.exists())
+        self.assertEqual(list(self.resources.rglob("*.tmp")), [])
+
+    def test_backup_and_staged_cleanup_failures_are_both_reported(self) -> None:
+        write_csv(self.resources / "speech.csv", [["KEY", "Old", "译文"]])
+        write_csv(self.resources / "speech-24023703.csv", [["key", "New"]])
+        real_unlink = Path.unlink
+
+        def fail_staged_cleanup(path: Path, *args: object, **kwargs: object) -> None:
+            if path.suffix == ".tmp":
+                raise OSError("injected staged cleanup failure")
+            real_unlink(path, *args, **kwargs)
+
+        with mock.patch(
+            "shutil.copyfile", side_effect=OSError("injected backup failure")
+        ):
+            with mock.patch.object(Path, "unlink", autospec=True, side_effect=fail_staged_cleanup):
+                with self.assertRaises(MigrationError) as raised:
+                    migrate(self.resources)
+
+        self.assertIn("injected backup failure", str(raised.exception))
+        self.assertIn("injected staged cleanup failure", str(raised.exception))
+
     def test_rejects_csv_parse_and_decode_errors(self) -> None:
         for directory_name, invalid_bytes in (
             ("parse-error", b'"unterminated'),

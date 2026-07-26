@@ -206,8 +206,9 @@ def backup_existing_outputs(outputs: list[tuple[Path, list[list[str]]]]) -> dict
 
 def rollback_outputs(
     outputs: list[tuple[Path, list[list[str]]]], backups: dict[Path, Path]
-) -> list[str]:
+) -> tuple[list[str], set[Path]]:
     errors = []
+    retained_backups = set()
     for target, _ in outputs:
         try:
             if target in backups:
@@ -215,8 +216,16 @@ def rollback_outputs(
             else:
                 target.unlink(missing_ok=True)
         except OSError as error:
-            errors.append(f"{target}: {error}")
-    return errors
+            if target in backups:
+                backup = backups[target]
+                retained_backups.add(backup)
+                errors.append(
+                    f"{target}: {error}; recovery backup retained at "
+                    f"{backup.resolve()}"
+                )
+            else:
+                errors.append(f"{target}: {error}")
+    return errors, retained_backups
 
 
 def replace_outputs_transactionally(
@@ -225,8 +234,12 @@ def replace_outputs_transactionally(
     staged = stage_outputs(outputs)
     try:
         backups = backup_existing_outputs(outputs)
-    except MigrationError:
-        cleanup_transaction_files(list(staged.values()))
+    except MigrationError as error:
+        cleanup_errors = cleanup_transaction_files(list(staged.values()))
+        if cleanup_errors:
+            raise MigrationError(
+                f"{error}; staged cleanup failed: {'; '.join(cleanup_errors)}"
+            ) from error
         raise
 
     current_target: Path | None = None
@@ -234,9 +247,16 @@ def replace_outputs_transactionally(
         for current_target, _ in outputs:
             os.replace(staged[current_target], current_target)
     except OSError as error:
-        rollback_errors = rollback_outputs(outputs, backups)
+        rollback_errors, retained_backups = rollback_outputs(outputs, backups)
         cleanup_errors = cleanup_transaction_files(
-            [*staged.values(), *backups.values()]
+            [
+                *staged.values(),
+                *(
+                    backup
+                    for backup in backups.values()
+                    if backup not in retained_backups
+                ),
+            ]
         )
         detail = f"Cannot replace migration output {current_target}: {error}"
         if rollback_errors:
