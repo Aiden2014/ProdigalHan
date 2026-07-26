@@ -340,6 +340,70 @@ class MigrationTests(unittest.TestCase):
         )
         self.assertEqual((summary.exact, summary.normalized, summary.fuzzy), (0, 0, 1))
 
+    def test_generated_index_match_fills_translation(self) -> None:
+        old_key = "Caroline/<MeetEvent>d__25-MoveNext-CAROLINE-HEY, YOU!*HELP ME OUT"
+        new_key = "Caroline/<MeetEvent>d__26-MoveNext-Caroline-Hey, you!*Help me out"
+        write_csv(self.resources / "speech.csv", [[old_key, "Old", "旧译文"]])
+        write_csv(self.resources / "speech-24023703.csv", [[new_key, "New"]])
+
+        summary = migrate(self.resources)
+
+        self.assertEqual(
+            read_csv(self.resources / "speech-24023703.csv"),
+            [[new_key, "New", "旧译文"]],
+        )
+        self.assertEqual(
+            (summary.exact, summary.normalized, summary.generated, summary.fuzzy),
+            (0, 0, 1, 0),
+        )
+        self.assertEqual((summary.old_only, summary.new_only), (0, 0))
+
+    def test_generated_index_collision_stays_unmatched(self) -> None:
+        old_rows = [
+            [
+                "Caroline/<MeetEvent>d__25-MoveNext-CAROLINE-HEY, YOU!*HELP ME OUT",
+                "Old 25",
+                "译文 25",
+            ],
+            [
+                "Caroline/<MeetEvent>d__26-MoveNext-CAROLINE-HEY, YOU!*HELP ME OUT",
+                "Old 26",
+                "译文 26",
+            ],
+        ]
+        new_key = "Caroline/<MeetEvent>d__27-MoveNext-Caroline-Hey, you!*Help me out"
+        write_csv(self.resources / "speech.csv", old_rows)
+        write_csv(self.resources / "speech-24023703.csv", [[new_key, "New"]])
+
+        summary = migrate(self.resources)
+
+        self.assertEqual(
+            read_csv(self.resources / "speech-24023703.csv"), [[new_key, "New", ""]]
+        )
+        self.assertEqual(summary.generated, 0)
+        self.assertEqual((summary.old_only, summary.new_only), (2, 1))
+
+    def test_generated_index_match_reuses_unique_translation(self) -> None:
+        old_key = "Caroline/<MeetEvent>d__25-MoveNext-CAROLINE-HEY, YOU!*HELP ME OUT"
+        new_keys = [
+            "Caroline/<MeetEvent>d__26-MoveNext-Caroline-Hey, you!*Help me out",
+            "Caroline/<MeetEvent>d__27-MoveNext-Caroline-Hey, you!*Help me out",
+        ]
+        write_csv(self.resources / "speech.csv", [[old_key, "Old", "旧译文"]])
+        write_csv(
+            self.resources / "speech-24023703.csv",
+            [[new_key, "New"] for new_key in new_keys],
+        )
+
+        summary = migrate(self.resources)
+
+        self.assertEqual(
+            read_csv(self.resources / "speech-24023703.csv"),
+            [[new_key, "New", "旧译文"] for new_key in new_keys],
+        )
+        self.assertEqual(summary.generated, 2)
+        self.assertEqual((summary.old_only, summary.new_only), (0, 0))
+
     def test_fuzzy_matching_rejects_keys_shorter_than_minimum_length(self) -> None:
         old_key = "A-12345678901234567"
         new_key = "A-12345678901234568"
@@ -695,7 +759,16 @@ class CliTests(unittest.TestCase):
                 [
                     ["KEY", "Text", "译文"],
                     ["SECOND*KEY", "Text", "第二条"],
-                    ["FUZZY-CONTEXT-A LONG SPELLING MISTAKE IN THIS MESSAGE", "Text", "模糊"],
+                    [
+                        "Caroline/<MeetEvent>d__25-MoveNext-CAROLINE-HEY, YOU!*HELP ME OUT",
+                        "Text",
+                        "编号",
+                    ],
+                    [
+                        "FUZZY-CONTEXT-A LONG SPELLING MISTAKE IN THIS MESSAGE",
+                        "Text",
+                        "模糊",
+                    ],
                 ],
             )
             write_csv(
@@ -703,6 +776,10 @@ class CliTests(unittest.TestCase):
                 [
                     ["key", "Text"],
                     ["second key", "Text"],
+                    [
+                        "Caroline/<MeetEvent>d__26-MoveNext-Caroline-Hey, you!*Help me out",
+                        "Text",
+                    ],
                     ["FUZZY-CONTEXT-A LONG SPELING MISTAKE IN THIS MESSAGE", "Text"],
                 ],
             )
@@ -713,11 +790,11 @@ class CliTests(unittest.TestCase):
 
             self.assertEqual(exit_code, 0)
             self.assertIn(
-                "speech-24023703.csv: exact=1 normalized=1 fuzzy=1 old_only=0 new_only=0",
+                "speech-24023703.csv: exact=1 normalized=1 generated=1 fuzzy=1 old_only=0 new_only=0",
                 stdout.getvalue(),
             )
             self.assertIn(
-                "files=1 exact=1 normalized=1 fuzzy=1 old_only=0 new_only=0",
+                "files=1 exact=1 normalized=1 generated=1 fuzzy=1 old_only=0 new_only=0",
                 stdout.getvalue(),
             )
 
