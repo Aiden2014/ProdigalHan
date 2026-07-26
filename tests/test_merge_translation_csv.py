@@ -207,6 +207,74 @@ class MigrationTests(unittest.TestCase):
         self.assertFalse((self.resources / "old" / "dialogue-ALLCH.csv").exists())
         self.assertFalse((self.resources / "new" / allch_new_path.name).exists())
 
+    def test_allch_mode_migrates_allch_pair_in_place(self) -> None:
+        old_key = "ACHIEVEMENT-UNLOCKED"
+        new_key = "achievement-unlocked"
+        new_path = self.resources / "achievement-ALLCH-24023703.csv"
+        write_csv(
+            self.resources / "achievement-ALLCH.csv",
+            [[old_key, "Achievement unlocked", "成就已解锁"]],
+        )
+        write_csv(new_path, [[new_key, "Achievement unlocked", "stale"]])
+
+        summary = migrate(self.resources, allch=True)
+
+        self.assertEqual(summary.files, 1)
+        self.assertEqual(summary.matched, 1)
+        self.assertEqual(
+            read_csv(new_path),
+            [[new_key, "Achievement unlocked", "成就已解锁"]],
+        )
+        self.assertFalse((self.resources / "achievement-24023703.csv").exists())
+
+    def test_allch_mode_writes_unmatched_reports_to_allch_directories(self) -> None:
+        old_path = self.resources / "achievement-ALLCH.csv"
+        new_path = self.resources / "achievement-ALLCH-24023703.csv"
+        old_rows = [["OLD-ONLY", "Old text", "旧文本"]]
+        new_rows = [["NEW-ONLY", "New text"]]
+        write_csv(old_path, old_rows)
+        write_csv(new_path, new_rows)
+
+        summary = migrate(self.resources, allch=True)
+
+        self.assertEqual((summary.old_only, summary.new_only), (1, 1))
+        self.assertEqual(
+            read_csv(self.resources / "old-allch" / old_path.name), old_rows
+        )
+        self.assertEqual(
+            read_csv(self.resources / "new-allch" / new_path.name), new_rows
+        )
+        self.assertFalse((self.resources / "old" / old_path.name).exists())
+        self.assertFalse((self.resources / "new" / new_path.name).exists())
+
+    def test_normal_mode_remains_compatible_when_allch_files_are_present(self) -> None:
+        normal_old_path = self.resources / "achievement.csv"
+        normal_new_path = self.resources / "achievement-24023703.csv"
+        write_csv(normal_old_path, [["OLD-ONLY", "Old text", "旧文本"]])
+        write_csv(normal_new_path, [["NEW-ONLY", "New text"]])
+        write_csv(
+            self.resources / "achievement-ALLCH.csv",
+            [["ALLCH", "Old text", "ALLCH 旧文本"]],
+        )
+        allch_new_path = self.resources / "achievement-ALLCH-24023703.csv"
+        write_csv(allch_new_path, [["ALLCH", "New text", "stale"]])
+        allch_new_before = allch_new_path.read_bytes()
+
+        summary = migrate(self.resources)
+
+        self.assertEqual((summary.files, summary.old_only, summary.new_only), (1, 1, 1))
+        self.assertEqual(
+            read_csv(self.resources / "old" / normal_old_path.name),
+            [["OLD-ONLY", "Old text", "旧文本"]],
+        )
+        self.assertEqual(
+            read_csv(self.resources / "new" / normal_new_path.name),
+            [["NEW-ONLY", "New text"]],
+        )
+        self.assertFalse((self.resources / "old-allch").exists())
+        self.assertFalse((self.resources / "new-allch").exists())
+        self.assertEqual(allch_new_path.read_bytes(), allch_new_before)
+
     def test_structural_matching_ignores_stars_but_keeps_other_punctuation(self) -> None:
         old_rows = [
             ["SPACE*KEY", "Text", "space"],
@@ -783,6 +851,19 @@ class ValidationTests(unittest.TestCase):
         with self.assertRaisesRegex(MigrationError, "Missing previous-version CSV"):
             migrate(self.resources)
 
+    def test_allch_mode_rejects_missing_allch_inputs_or_pair(self) -> None:
+        write_csv(self.resources / "speech.csv", [["KEY", "Text", "译文"]])
+        write_csv(self.resources / "speech-24023703.csv", [["key", "Text"]])
+
+        with self.assertRaisesRegex(MigrationError, "No .* files found"):
+            migrate(self.resources, allch=True)
+
+        write_csv(
+            self.resources / "speech-ALLCH-24023703.csv", [["KEY", "Text"]]
+        )
+        with self.assertRaisesRegex(MigrationError, "Missing previous-version CSV"):
+            migrate(self.resources, allch=True)
+
 
 class CliTests(unittest.TestCase):
     def test_main_reports_totals(self) -> None:
@@ -830,6 +911,33 @@ class CliTests(unittest.TestCase):
             )
             self.assertIn(
                 "files=1 exact=1 normalized=1 generated=1 fuzzy=1 old_only=0 new_only=0",
+                stdout.getvalue(),
+            )
+
+    def test_main_allch_mode_reports_allch_filename_and_totals(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            resources = Path(directory) / "resources"
+            resources.mkdir()
+            write_csv(
+                resources / "achievement-ALLCH.csv",
+                [["ACHIEVEMENT-UNLOCKED", "Old text", "成就已解锁"]],
+            )
+            write_csv(
+                resources / "achievement-ALLCH-24023703.csv",
+                [["achievement-unlocked", "New text"]],
+            )
+            stdout = io.StringIO()
+
+            with contextlib.redirect_stdout(stdout):
+                exit_code = main(["--resources-dir", str(resources), "--allch"])
+
+            self.assertEqual(exit_code, 0)
+            self.assertIn(
+                "achievement-ALLCH-24023703.csv: exact=1 normalized=0 generated=0 fuzzy=0 old_only=0 new_only=0",
+                stdout.getvalue(),
+            )
+            self.assertIn(
+                "files=1 exact=1 normalized=0 generated=0 fuzzy=0 old_only=0 new_only=0",
                 stdout.getvalue(),
             )
 
