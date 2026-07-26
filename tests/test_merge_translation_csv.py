@@ -1,9 +1,11 @@
 import csv
+import contextlib
+import io
 import tempfile
 import unittest
 from pathlib import Path
 
-from scripts.merge_translation_csv import MigrationError, migrate
+from scripts.merge_translation_csv import MigrationError, main, migrate
 
 
 def write_csv(path: Path, rows: list[list[str]], encoding: str = "utf-8") -> None:
@@ -133,3 +135,80 @@ class MigrationTests(unittest.TestCase):
 
                 with self.assertRaisesRegex(MigrationError, "Cannot read CSV"):
                     migrate(resources)
+
+
+class ValidationTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.temporary_directory = tempfile.TemporaryDirectory()
+        self.resources = Path(self.temporary_directory.name) / "resources"
+        self.resources.mkdir()
+
+    def tearDown(self) -> None:
+        self.temporary_directory.cleanup()
+
+    def test_rejects_duplicate_old_keys_before_writing(self) -> None:
+        write_csv(
+            self.resources / "speech.csv",
+            [["KEY", "One", "一"], ["key", "Two", "二"]],
+        )
+        new_path = self.resources / "speech-24023703.csv"
+        write_csv(new_path, [["Key", "One"]])
+        original_new_bytes = new_path.read_bytes()
+
+        with self.assertRaisesRegex(MigrationError, "duplicates first-column key"):
+            migrate(self.resources)
+
+        self.assertEqual(new_path.read_bytes(), original_new_bytes)
+        self.assertFalse((self.resources / "old").exists())
+        self.assertFalse((self.resources / "new").exists())
+
+    def test_rejects_any_invalid_pair_before_writing_valid_pairs(self) -> None:
+        valid_new = self.resources / "a-24023703.csv"
+        write_csv(self.resources / "a.csv", [["A", "A", "甲"]])
+        write_csv(valid_new, [["a", "A"]])
+        original_valid_bytes = valid_new.read_bytes()
+        write_csv(self.resources / "b.csv", [["BROKEN"]])
+        write_csv(self.resources / "b-24023703.csv", [["B", "B"]])
+
+        with self.assertRaisesRegex(MigrationError, "fewer than two columns"):
+            migrate(self.resources)
+
+        self.assertEqual(valid_new.read_bytes(), original_valid_bytes)
+        self.assertFalse((self.resources / "old").exists())
+        self.assertFalse((self.resources / "new").exists())
+
+    def test_rejects_missing_pair_and_empty_input_directory(self) -> None:
+        with self.assertRaisesRegex(MigrationError, "No .* files found"):
+            migrate(self.resources)
+
+        write_csv(self.resources / "speech-24023703.csv", [["KEY", "Text"]])
+        with self.assertRaisesRegex(MigrationError, "Missing previous-version CSV"):
+            migrate(self.resources)
+
+
+class CliTests(unittest.TestCase):
+    def test_main_reports_totals(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            resources = Path(directory) / "resources"
+            resources.mkdir()
+            write_csv(resources / "speech.csv", [["KEY", "Text", "译文"]])
+            write_csv(resources / "speech-24023703.csv", [["key", "Text"]])
+            stdout = io.StringIO()
+
+            with contextlib.redirect_stdout(stdout):
+                exit_code = main(["--resources-dir", str(resources)])
+
+            self.assertEqual(exit_code, 0)
+            self.assertIn("files=1 matched=1 old_only=0 new_only=0", stdout.getvalue())
+
+    def test_main_returns_nonzero_and_prints_validation_error(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            resources = Path(directory) / "resources"
+            resources.mkdir()
+            stderr = io.StringIO()
+
+            with contextlib.redirect_stderr(stderr):
+                exit_code = main(["--resources-dir", str(resources)])
+
+            self.assertEqual(exit_code, 1)
+            self.assertIn("No *-24023703.csv files found", stderr.getvalue())
