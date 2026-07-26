@@ -46,6 +46,7 @@ def discover_pairs(resources_dir: Path) -> list[tuple[Path, Path]]:
     return [
         (resources_dir / f"{new_path.name.removesuffix(suffix)}.csv", new_path)
         for new_path in new_paths
+        if not new_path.name.removesuffix(suffix).endswith("-ALLCH")
     ]
 
 

@@ -65,6 +65,22 @@ class MigrationTests(unittest.TestCase):
         )
         self.assertEqual(summary.matched, 2)
 
+    def test_skips_allch_csv_pairs(self) -> None:
+        write_csv(
+            self.resources / "dialogue-ALLCH.csv",
+            [["KEY", "Old text", "旧文本"]],
+        )
+        new_path = self.resources / "dialogue-ALLCH-24023703.csv"
+        write_csv(new_path, [["KEY", "New text", "stale"]])
+        before_migration = new_path.read_bytes()
+
+        summary = migrate(self.resources)
+
+        self.assertEqual(summary.files, 0)
+        self.assertEqual(new_path.read_bytes(), before_migration)
+        self.assertFalse((self.resources / "old" / "dialogue-ALLCH.csv").exists())
+        self.assertFalse((self.resources / "new" / new_path.name).exists())
+
     def test_writes_original_old_only_and_new_only_rows(self) -> None:
         old_only = ["OLD-SCENE", "Removed text", "旧剧情"]
         new_only = ["NEW-SCENE", "Added text"]
