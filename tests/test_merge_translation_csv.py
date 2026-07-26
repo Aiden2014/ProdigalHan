@@ -341,8 +341,8 @@ class MigrationTests(unittest.TestCase):
         self.assertEqual((summary.exact, summary.normalized, summary.fuzzy), (0, 0, 1))
 
     def test_fuzzy_matching_rejects_keys_shorter_than_minimum_length(self) -> None:
-        old_key = "A-123456789012"
-        new_key = "A-123456789013"
+        old_key = "A-12345678901234567"
+        new_key = "A-12345678901234568"
         write_csv(self.resources / "item.csv", [[old_key, "Old", "不应匹配"]])
         write_csv(self.resources / "item-24023703.csv", [[new_key, "New"]])
 
@@ -350,6 +350,48 @@ class MigrationTests(unittest.TestCase):
 
         self.assertEqual(
             read_csv(self.resources / "item-24023703.csv"),
+            [[new_key, "New", ""]],
+        )
+        self.assertEqual((summary.fuzzy, summary.old_only, summary.new_only), (0, 1, 1))
+
+    def test_fuzzy_matching_rejects_different_first_hyphen_prefixes(self) -> None:
+        old_key = "OLD-CONTEXT-A LONG SHARED MESSAGE THAT WOULD OTHERWISE MATCH"
+        new_key = "NEW-CONTEXT-A LONG SHARED MESSAGE THAT WOULD OTHERWISE MATCH"
+        write_csv(self.resources / "speech.csv", [[old_key, "Old", "不应匹配"]])
+        write_csv(self.resources / "speech-24023703.csv", [[new_key, "New"]])
+
+        summary = migrate(self.resources)
+
+        self.assertEqual(
+            read_csv(self.resources / "speech-24023703.csv"),
+            [[new_key, "New", ""]],
+        )
+        self.assertEqual((summary.fuzzy, summary.old_only, summary.new_only), (0, 1, 1))
+
+    def test_fuzzy_matching_rejects_edit_distance_greater_than_eight(self) -> None:
+        old_key = "DISTANCE-" + "A" * 300
+        new_key = "DISTANCE-" + "B" * 9 + "A" * 291
+        write_csv(self.resources / "speech.csv", [[old_key, "Old", "不应匹配"]])
+        write_csv(self.resources / "speech-24023703.csv", [[new_key, "New"]])
+
+        summary = migrate(self.resources)
+
+        self.assertEqual(
+            read_csv(self.resources / "speech-24023703.csv"),
+            [[new_key, "New", ""]],
+        )
+        self.assertEqual((summary.fuzzy, summary.old_only, summary.new_only), (0, 1, 1))
+
+    def test_fuzzy_matching_rejects_candidate_below_ratio_threshold(self) -> None:
+        old_key = "RATIO-" + "A" * 200
+        new_key = "RATIO-" + "B" * 8 + "A" * 192
+        write_csv(self.resources / "speech.csv", [[old_key, "Old", "不应匹配"]])
+        write_csv(self.resources / "speech-24023703.csv", [[new_key, "New"]])
+
+        summary = migrate(self.resources)
+
+        self.assertEqual(
+            read_csv(self.resources / "speech-24023703.csv"),
             [[new_key, "New", ""]],
         )
         self.assertEqual((summary.fuzzy, summary.old_only, summary.new_only), (0, 1, 1))
@@ -375,6 +417,32 @@ class MigrationTests(unittest.TestCase):
             read_csv(self.resources / "new" / "speech-24023703.csv"),
             [[new_key, "New"]],
         )
+
+    def test_structural_match_wins_over_fuzzy_candidate(self) -> None:
+        structural_old_key = (
+            "PRIORITY-CONTEXT-. . .*THIS IS A LONG ENOUGH MESSAGE FOR MATCHING"
+        )
+        fuzzy_old_key = (
+            "PRIORITY-CONTEXT-... THIS IS A LONG ENOUGH MESSAGE FOR MATCHINX"
+        )
+        new_key = "priority-context-... this is a long enough message for matching"
+        write_csv(
+            self.resources / "speech.csv",
+            [
+                [structural_old_key, "Structural", "结构匹配"],
+                [fuzzy_old_key, "Fuzzy", "不应选中"],
+            ],
+        )
+        write_csv(self.resources / "speech-24023703.csv", [[new_key, "New"]])
+
+        summary = migrate(self.resources)
+
+        self.assertEqual(
+            read_csv(self.resources / "speech-24023703.csv"),
+            [[new_key, "New", "结构匹配"]],
+        )
+        self.assertEqual((summary.exact, summary.normalized, summary.fuzzy), (0, 1, 0))
+        self.assertEqual((summary.old_only, summary.new_only), (1, 0))
 
     def test_writes_original_old_only_and_new_only_rows(self) -> None:
         old_only = ["OLD-SCENE", "Removed text", "旧剧情"]
