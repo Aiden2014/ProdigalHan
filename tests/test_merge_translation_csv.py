@@ -7,7 +7,12 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from scripts.merge_translation_csv import MigrationError, main, migrate
+from scripts.merge_translation_csv import (
+    MigrationError,
+    main,
+    migrate,
+    normalize_structural_key,
+)
 
 
 def write_csv(path: Path, rows: list[list[str]], encoding: str = "utf-8") -> None:
@@ -29,6 +34,38 @@ class MigrationTests(unittest.TestCase):
 
     def tearDown(self) -> None:
         self.temporary_directory.cleanup()
+
+    def test_structural_normalization_unifies_ellipsis_stars_and_whitespace(self) -> None:
+        expected = "shopitem-purchase--... i'm concerned."
+
+        self.assertEqual(
+            normalize_structural_key("ShopItem-Purchase--. . .*I'M CONCERNED."),
+            expected,
+        )
+        self.assertEqual(
+            normalize_structural_key("ShopItem-Purchase--...*I'm   concerned."),
+            expected,
+        )
+        self.assertEqual(
+            normalize_structural_key("ShopItem-Purchase--…  I'm concerned."),
+            expected,
+        )
+
+    def test_structural_match_migrates_ellipsis_variant(self) -> None:
+        old_key = "ShopItem-Purchase--. . .*I'M CONCERNED."
+        new_key = "ShopItem-Purchase--...*I'm concerned."
+        write_csv(self.resources / "item.csv", [[old_key, old_key, "…*我很担心。"]])
+        write_csv(self.resources / "item-24023703.csv", [[new_key, new_key]])
+
+        summary = migrate(self.resources)
+
+        self.assertEqual(
+            read_csv(self.resources / "item-24023703.csv"),
+            [[new_key, new_key, "…*我很担心。"]],
+        )
+        self.assertEqual((summary.exact, summary.normalized), (0, 1))
+        self.assertEqual(summary.matched, 1)
+        self.assertEqual((summary.old_only, summary.new_only), (0, 0))
 
     def test_matches_first_column_with_casefold_and_replaces_translation(self) -> None:
         write_csv(
@@ -118,34 +155,102 @@ class MigrationTests(unittest.TestCase):
         self.assertFalse((self.resources / "old" / "dialogue-ALLCH.csv").exists())
         self.assertFalse((self.resources / "new" / allch_new_path.name).exists())
 
-    def test_casefold_matching_keeps_whitespace_punctuation_and_stars_significant(
-        self,
-    ) -> None:
+    def test_structural_matching_ignores_stars_but_keeps_other_punctuation(self) -> None:
         old_rows = [
-            ["SPACE KEY", "Text", "space"],
+            ["SPACE*KEY", "Text", "space"],
             ["PUNCT-KEY", "Text", "punctuation"],
-            ["*STARKEY", "Text", "star"],
         ]
         new_rows = [
-            ["space  key", "Text"],
+            ["space   key", "Text"],
             ["punct.key", "Text"],
-            ["starkey*", "Text"],
         ]
         write_csv(self.resources / "speech.csv", old_rows)
         write_csv(self.resources / "speech-24023703.csv", new_rows)
 
         summary = migrate(self.resources)
 
-        self.assertEqual(summary.matched, 0)
-        self.assertEqual(summary.old_only, 3)
-        self.assertEqual(summary.new_only, 3)
+        self.assertEqual((summary.exact, summary.normalized), (0, 1))
+        self.assertEqual((summary.old_only, summary.new_only), (1, 1))
         self.assertEqual(
             read_csv(self.resources / "speech-24023703.csv"),
-            [row + [""] for row in new_rows],
+            [["space   key", "Text", "space"], ["punct.key", "Text", ""]],
+        )
+        self.assertEqual(
+            read_csv(self.resources / "old" / "speech.csv"),
+            [["PUNCT-KEY", "Text", "punctuation"]],
+        )
+        self.assertEqual(
+            read_csv(self.resources / "new" / "speech-24023703.csv"),
+            [["punct.key", "Text"]],
+        )
+
+    def test_exact_match_takes_precedence_over_structural_candidate(self) -> None:
+        write_csv(
+            self.resources / "speech.csv",
+            [
+                ["CTX-HELLO*WORLD", "Text", "exact"],
+                ["CTX-HELLO WORLD", "Text", "fallback"],
+            ],
+        )
+        write_csv(
+            self.resources / "speech-24023703.csv",
+            [["ctx-hello*world", "Text"]],
+        )
+
+        summary = migrate(self.resources)
+
+        self.assertEqual(
+            read_csv(self.resources / "speech-24023703.csv"),
+            [["ctx-hello*world", "Text", "exact"]],
+        )
+        self.assertEqual((summary.exact, summary.normalized), (1, 0))
+        self.assertEqual(summary.old_only, 1)
+
+    def test_normalized_old_key_collision_stays_unmatched(self) -> None:
+        old_rows = [
+            ["CTX-. . .*READY", "Text", "first"],
+            ["CTX-… READY", "Text", "second"],
+        ]
+        new_rows = [["ctx-... ready", "Text"]]
+        write_csv(self.resources / "speech.csv", old_rows)
+        write_csv(self.resources / "speech-24023703.csv", new_rows)
+
+        summary = migrate(self.resources)
+
+        self.assertEqual((summary.exact, summary.normalized), (0, 0))
+        self.assertEqual((summary.old_only, summary.new_only), (2, 1))
+        self.assertEqual(
+            read_csv(self.resources / "speech-24023703.csv"),
+            [["ctx-... ready", "Text", ""]],
         )
         self.assertEqual(read_csv(self.resources / "old" / "speech.csv"), old_rows)
         self.assertEqual(
-            read_csv(self.resources / "new" / "speech-24023703.csv"), new_rows
+            read_csv(self.resources / "new" / "speech-24023703.csv"),
+            new_rows,
+        )
+
+    def test_semantic_you_to_i_change_stays_unmatched(self) -> None:
+        old_key = (
+            "ShopItem-Purchase--CLEATED BOOTS*EQUIPPED!"
+            "*YOU WILL NOW DEAL*MORE DAMAGE."
+        )
+        new_key = (
+            "ShopItem-Purchase--Cleated Boots equipped!"
+            "*I will now deal more damage."
+        )
+        write_csv(
+            self.resources / "item.csv",
+            [[old_key, old_key, "防滑钉鞋*已装备！*你现在可以造成*更多的伤害。"]],
+        )
+        write_csv(self.resources / "item-24023703.csv", [[new_key, new_key]])
+
+        summary = migrate(self.resources)
+
+        self.assertEqual((summary.exact, summary.normalized), (0, 0))
+        self.assertEqual((summary.old_only, summary.new_only), (1, 1))
+        self.assertEqual(
+            read_csv(self.resources / "item-24023703.csv"),
+            [[new_key, new_key, ""]],
         )
 
     def test_writes_original_old_only_and_new_only_rows(self) -> None:
@@ -380,15 +485,28 @@ class CliTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             resources = Path(directory) / "resources"
             resources.mkdir()
-            write_csv(resources / "speech.csv", [["KEY", "Text", "译文"]])
-            write_csv(resources / "speech-24023703.csv", [["key", "Text"]])
+            write_csv(
+                resources / "speech.csv",
+                [["KEY", "Text", "译文"], ["SECOND*KEY", "Text", "第二条"]],
+            )
+            write_csv(
+                resources / "speech-24023703.csv",
+                [["key", "Text"], ["second key", "Text"]],
+            )
             stdout = io.StringIO()
 
             with contextlib.redirect_stdout(stdout):
                 exit_code = main(["--resources-dir", str(resources)])
 
             self.assertEqual(exit_code, 0)
-            self.assertIn("files=1 matched=1 old_only=0 new_only=0", stdout.getvalue())
+            self.assertIn(
+                "speech-24023703.csv: exact=1 normalized=1 old_only=0 new_only=0",
+                stdout.getvalue(),
+            )
+            self.assertIn(
+                "files=1 exact=1 normalized=1 old_only=0 new_only=0",
+                stdout.getvalue(),
+            )
 
     def test_main_returns_nonzero_and_prints_validation_error(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
