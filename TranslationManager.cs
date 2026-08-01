@@ -56,21 +56,21 @@ public static class TranslationManager
         {
             Plugin.Logger.LogInfo("Initializing translations...");
             
-            speechTranslationMap = ResourceLoader.GetSpeechTranslations("speech.csv");
-            speecherTranslationMap = ResourceLoader.GetTranslations("speecher.csv");
-            genericInfoTranslationMap = ResourceLoader.GetGenericTranslations("generic-info.csv");
-            genericNameTranslationMap = ResourceLoader.GetTranslations("generic-name.csv");
-            signpostInfoTranslationMap = ResourceLoader.GetTranslations("signpost-info-bundle.csv");
-            toolTranslationMap = ResourceLoader.GetTranslations("tool.csv");
-            toolAboutTranslationMap = ResourceLoader.GetToolAboutTranslationMap("tool-about.csv");
-            itemTranslationMap = ResourceLoader.GetTranslations("item.csv");
-            itemTooltipTranslationMap = ResourceLoader.GetTranslations("item-tooltip.csv");
-            achievementTranslationMap = ResourceLoader.GetTranslations("achievement-name.csv");
-            achievementHintTranslationMap = ResourceLoader.GetTranslations("achievement-hint.csv");
-            achievementAboutTranslationMap = ResourceLoader.GetTranslations("achievement-about.csv");
-            guestInfoTranslationMap = ResourceLoader.GetGenericTranslations("guest-info.csv");
-            guestNameTranslationMap = ResourceLoader.GetTranslations("guest-name.csv");
-            zaegulWrongNameTranslationMap = ResourceLoader.GetTranslations("zaegul-wrong-name.csv");
+            speechTranslationMap = ResourceLoader.GetSpeechTranslations("speech-24023703.csv");
+            speecherTranslationMap = ResourceLoader.GetTranslations("speecher-24023703.csv");
+            genericInfoTranslationMap = ResourceLoader.GetGenericTranslations("generic-info-24023703.csv");
+            genericNameTranslationMap = ResourceLoader.GetTranslations("generic-name-24023703.csv");
+            signpostInfoTranslationMap = ResourceLoader.GetTranslations("signpost-info-bundle-24023703.csv");
+            toolTranslationMap = ResourceLoader.GetTranslations("tool-24023703.csv");
+            toolAboutTranslationMap = ResourceLoader.GetToolAboutTranslationMap("tool-about-24023703.csv");
+            itemTranslationMap = ResourceLoader.GetTranslations("item-24023703.csv");
+            itemTooltipTranslationMap = ResourceLoader.GetTranslations("item-tooltip-24023703.csv");
+            achievementTranslationMap = ResourceLoader.GetTranslations("achievement-name-24023703.csv");
+            achievementHintTranslationMap = ResourceLoader.GetTranslations("achievement-hint-24023703.csv");
+            achievementAboutTranslationMap = ResourceLoader.GetTranslations("achievement-about-24023703.csv");
+            guestInfoTranslationMap = ResourceLoader.GetGenericTranslations("guest-info-24023703.csv");
+            guestNameTranslationMap = ResourceLoader.GetTranslations("guest-name-24023703.csv");
+            zaegulWrongNameTranslationMap = ResourceLoader.GetTranslations("zaegul-wrong-name-24023703.csv");
             // 初始化占位符模板（需要在 speechTranslationMap 加载后调用）
             InitializeSpeechTemplates();
 
