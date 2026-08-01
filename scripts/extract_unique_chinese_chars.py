@@ -54,7 +54,7 @@ def extract_unique_chinese_chars(csv_files, output_file):
 def main():
     # Set file paths
     project_root = Path(__file__).parent.parent
-    resources_dir = project_root / 'resources'
+    resources_dir = project_root / 'resources' / '20260801'
     csv_files = sorted(resources_dir.glob('*.csv'))
     output_file = resources_dir / 'unique_chinese_chars.txt'
 
