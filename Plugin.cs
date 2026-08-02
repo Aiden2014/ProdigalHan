@@ -255,19 +255,13 @@ public static class Hooks
 
     [HarmonyPatch(typeof(CHAT_BOX), nameof(CHAT_BOX.NEXT))]
     [HarmonyPostfix]
-    public static void CHAT_BOX_NEXT_Postfix_InstantMode(CHAT_BOX __instance, int ___LENGTH, int ___LINES, int ___Key_ID, List<char> ___KeysToPress)
+    public static void CHAT_BOX_NEXT_Postfix_ReflowAfterSkip(CHAT_BOX __instance, int ___LENGTH, int ___LINES)
     {
-        // 在即时模式下，NEXT 处理后需要调整位置
-        // 注意：NEXT COMPLETE 分支会调用 StartTyping()，已由上面的 Postfix 处理
-        // 这里主要处理 NEXT WAITING 分支（ShiftUp + APPLY_LETTER）
-        // 为了避免重复处理，检查是否是 WAITING 后的状态：
-        // WAITING 后 Key_ID < KeysToPress.Count（还有剩余字符）
-        // COMPLETE 后会调用 StartTyping 重置 Key_ID=0
-        // 简单判断：如果 Key_ID > 0 就认为是从 WAITING 继续的
-        if (IsInstantMode() && ___Key_ID > 0 && ___Key_ID <= ___KeysToPress.Count)
-        {
-            TextLayoutManager.AdjustAllTextPositionsByTextSlots(__instance, ___LENGTH, ___LINES);
-        }
+        // NEXT can enter FORCE_FINISH, which recursively calls APPLY_LETTER until
+        // the remaining text is visible. Reflow only after that recursion returns;
+        // the TEXT slots are then the authoritative state for every text speed.
+        TextLayoutManager.AdjustAllTextPositionsByTextSlots(__instance, ___LENGTH, ___LINES);
+        TextLayoutManager.ResetLineTracking();
     }
 
     static (string label, Func<string, string, string> predicate)[] lineStrategies =
